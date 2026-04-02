@@ -107,6 +107,18 @@ No run order is stored or required.
 
 ---
 
+## 3.6 CameraSession Component
+
+CameraSessions represent the assignment of a physical camera to a timing role for a specific period of time. They enable:
+
+- hardware replacement without data mutation  
+- accurate role attribution for TimingEvents  
+- clean separation between hardware identity and event logic  
+
+Architecture diagrams should include CameraSession as a distinct entity between Cameras and TimingEvents.
+
+---
+
 ### 4. Timing Pipeline Architecture
 
 The timing pipeline processes events from capture to final scoring.

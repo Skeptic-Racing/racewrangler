@@ -136,6 +136,19 @@ At staging, the starter:
 - Grid workers inform the driver upon return  
 - Grid UI tracks rerun status  
 
+#### 5.6 Camera Replacement and Session-Based Role Assignment
+
+Cameras may fail during an event. To support seamless hardware replacement, Race Wrangler uses **CameraSessions** to bind a physical camera to a timing role (start, finish, split).
+
+When a camera fails:
+1. A new CameraSession is created for the replacement camera  
+2. The old session is closed  
+3. TimingEvents continue flowing without interruption  
+4. No TimingEvents are reassigned or rewritten  
+
+This ensures operational continuity and preserves a complete audit trail.
+
+
 ---
 
 ### 6. OCR and Validation Pipeline
