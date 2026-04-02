@@ -1,0 +1,32 @@
+[
+  {
+    "id": 1,
+    "number": "1",
+    "class": "LMP1",
+    "model": "Audi R18 e-tron quattro"
+  },
+  {
+    "id": 2,
+    "number": "488",
+    "class": "GT3",
+    "model": "Ferrari 488 GT3"
+  },
+  {
+    "id": 3,
+    "number": "911",
+    "class": "GTE",
+    "model": "Porsche 911 RSR"
+  },
+  {
+    "id": 4,
+    "number": "22",
+    "class": "GT",
+    "model": "Ferrari 250 GTO"
+  },
+  {
+    "id": 5,
+    "number": "66",
+    "class": "GTE",
+    "model": "Ford GT"
+  }
+]
