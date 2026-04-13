@@ -70,11 +70,88 @@ Race Wrangler supports full rerun management:
 - Grid UI tracks rerun status  
 - Runs marked as reruns are clearly identified in results  
 
+**Enhanced behavior (from POC):**
+- Timing staff may explicitly toggle Re‑Run status  
+- Re‑Run status is synchronized across all devices  
+- Re‑Run interacts cleanly with Missed Trip and DNF workflows  
+
 ---
 
-### 3. Worker Interfaces
+## 2.6 Missed Trip Workflow *(New)*
+A durable operational feature discovered during the POC:
 
-Race Wrangler provides role-specific browser interfaces accessed via event-scoped tokens. No accounts or passwords are required for workers.
+- Finish Workers may mark a run as **Missed Trip**  
+- Missed Trip runs remain in the **Active Runs** list  
+- Timing staff resolve Missed Trip by:
+  - marking DNF  
+  - assigning Re‑Run  
+  - or manually completing the run  
+- Missed Trip status is visually highlighted across all UIs  
+
+This workflow reflects real‑world timing edge cases.
+
+---
+
+## 2.7 Global Hold Start *(New)*
+Timing staff may assert a **global Hold Start** state to pause staging.
+
+- Starter UI displays a prominent Hold banner  
+- Hold is independent of penalties, reruns, or DNF  
+- Hold state is synchronized across all devices  
+- Hold can be released by timing staff when safe  
+
+This supports course resets, timing anomalies, and safety interventions.
+
+---
+
+## 2.8 Shared Finish Trigger *(New)*
+A backend‑shared finish event used to synchronize finish timing across devices.
+
+- Raised by timing staff or admin tools  
+- Observed by Finish Worker UI on any device  
+- Anchors finish timing to a consistent timestamp  
+- Supports multi‑device demo and real‑world timing workflows  
+
+---
+
+## 2.9 Trigger‑Anchored Finish Timing *(New)*
+When a shared finish trigger is active:
+
+- Expected elapsed time is computed as  
+  `trigger_timestamp - run.start_time`  
+- Confirm Finish uses the trigger timestamp as the finish time  
+- Ensures consistent timing across devices  
+- Prevents discrepancies caused by UI latency  
+
+---
+
+## 2.10 Multi‑Device Synchronization *(New)*
+Race Wrangler synchronizes operational state across all worker devices:
+
+- Active runs  
+- Missed Trip status  
+- Re‑Run status  
+- Hold Start state  
+- Shared finish trigger  
+- Timing metadata  
+
+This ensures consistent behavior during multi‑device operation.
+
+---
+
+## 2.11 UTC‑Normalized Time Display *(New)*
+All devices display times using a consistent UTC‑normalized format.
+
+This prevents:
+- timezone drift  
+- device clock skew  
+- inconsistent elapsed time displays  
+
+---
+
+## 3. Worker Interfaces
+
+Race Wrangler provides role‑specific browser interfaces accessed via event‑scoped tokens.
 
 ---
 
@@ -102,8 +179,7 @@ The Starter UI provides:
   - Number Mistake Detection warnings  
 - Clear “Ready / Hold” indicators  
 - Simple controls for acknowledging issues  
-
-The starter is the final human checkpoint before the run begins.
+- Displays **Global Hold Start** state
 
 ---
 
@@ -115,11 +191,24 @@ The Timing Console is used by timing staff to:
 - Approve or dismiss Number Mistake Detection warnings  
 - Apply penalties (cones, DNFs)  
 - Determine rerun eligibility  
+- Manage Missed Trip and Re‑Run workflows  
+- Assert or release **Global Hold Start**
 - Monitor event progress  
 
 ---
 
-## 3.4 Course Worker UI
+## 3.4 Finish Worker UI
+Provides:
+- Active run list  
+- Manual run selection  
+- Missed Trip button  
+- Expected elapsed time display  
+- Confirm Finish workflow  
+- Shared finish trigger synchronization  
+
+---
+
+## 3.5 Course Worker UI
 A lightweight interface for:
 - Reporting cones  
 - Reporting DNFs  
@@ -129,14 +218,14 @@ Course workers do not interact with timing or validation features.
 
 ---
 
-## 3.5 Admin UI
+## 3.6 Admin UI
 The Admin UI supports:
 - Event configuration  
 - Class and run group setup  
 - Worker token generation  
 - Timing hardware monitoring  
 - Optional cloud sync  
-- Results publishing  
+- Results publishing 
 
 ---
 
@@ -193,6 +282,8 @@ Timing staff can:
 - Correct OCR errors  
 - Apply penalties  
 - Override system warnings  
+- Manage Missed Trip and Re‑Run workflows  
+- Control Hold Start  
 
 ---
 
