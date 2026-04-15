@@ -41,6 +41,13 @@ storage/photos/*
 # Build
 *.log
 npm-debug.log*
+*:Zone.Identifier
+
+# OCR POC artifacts
+ocr_poc/venv/
+ocr_poc/.cache/
+ocr_poc/output/
+ocr_poc/reports/
 
 # OS
 .DS_Store

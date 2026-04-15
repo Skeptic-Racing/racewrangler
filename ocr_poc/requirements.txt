@@ -1,0 +1,5 @@
+pillow==10.1.0
+paddleocr==2.7.3
+paddlepaddle==2.6.2
+numpy<2.0
+opencv-python
