@@ -35,6 +35,4 @@ def normalize_class(value: str | None) -> str | None:
 
     if not CLASS_ALLOWED_RE.fullmatch(cleaned):
         return None
-    if len(cleaned) > 4 and cleaned not in {"CAM-C", "CAM-S", "CAM-T"}:
-        return None
     return cleaned
