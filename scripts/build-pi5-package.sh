@@ -33,11 +33,12 @@ rm -f "$ARCHIVE"
 echo "Bundling source code..."
 tar -czf "$ARCHIVE" \
     -C "$REPO_ROOT" \
-    --exclude="backend/__pycache__" \
-    --exclude="backend/*.db" \
-    --exclude="backend/.venv" \
-    --exclude="ocr_poc/__pycache__" \
-    --exclude="ocr_poc/.venv" \
+    --exclude=".venv" \
+    --exclude="venv" \
+    --exclude="__pycache__" \
+    --exclude="*.db" \
+    --exclude="*.pyc" \
+    --exclude="output" \
     backend/ \
     ocr_poc/
 
