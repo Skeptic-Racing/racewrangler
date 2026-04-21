@@ -53,3 +53,4 @@ ocr_poc/reports/
 .DS_Store
 Thumbs.db
 docs/ocr/test_images/
+dist/

@@ -76,15 +76,12 @@ log "============================================="
 # =============================================================================
 
 log "Syncing system clock before apt (Pi has no RTC on first boot)..."
-systemctl start systemd-timesyncd || true
-for i in $(seq 1 20); do
-    timedatectl show | grep -q 'NTPSynchronized=yes' && break
-    sleep 2
-done
-if ! timedatectl show | grep -q 'NTPSynchronized=yes'; then
-    log "NTP not synced yet — setting clock from HTTP Date header..."
-    HTTP_DATE=$(curl -sI --max-time 5 http://google.com | grep -i '^date:' | cut -d' ' -f2- | tr -d '\r' || true)
-    [ -n "$HTTP_DATE" ] && date -s "$HTTP_DATE" && log "Clock set to: $HTTP_DATE"
+HTTP_DATE=$(curl -sI --max-time 5 http://google.com | grep -i '^date:' | cut -d' ' -f2- | tr -d '\r' || true)
+if [ -n "$HTTP_DATE" ]; then
+    date -s "$HTTP_DATE" > /dev/null
+    log "Clock set from HTTP: $HTTP_DATE"
+else
+    log "Warning: could not set clock from HTTP — apt signature checks may fail."
 fi
 log "Clock sync done: $(date -u)"
 
@@ -202,46 +199,61 @@ systemctl enable chrony
 log "chrony configured."
 
 # =============================================================================
-# 7. Clone RaceWrangler repo
+# 7. Install RaceWrangler code and Python dependencies
 # =============================================================================
 
-log "Cloning RaceWrangler repository..."
-if [ -d "$INSTALL_DIR" ]; then
-    log "Directory $INSTALL_DIR already exists — pulling latest..."
-    cd "$INSTALL_DIR"
-    git pull origin "$REPO_BRANCH" || log "Warning: git pull failed, continuing with existing code."
+PACKAGE_ARCHIVE="/boot/firmware/racewrangler-server.tar.gz"
+
+if [ -f "$PACKAGE_ARCHIVE" ]; then
+    log "Found offline package archive — installing without internet..."
+    mkdir -p "$INSTALL_DIR"
+    tar -xzf "$PACKAGE_ARCHIVE" -C "$INSTALL_DIR"
+    chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
+    log "Code extracted to $INSTALL_DIR."
+
+    log "Creating Python virtual environment..."
+    sudo -u "$SERVICE_USER" python3 -m venv "${INSTALL_DIR}/.venv"
+
+    log "Installing backend requirements from bundled wheels..."
+    sudo -u "$SERVICE_USER" \
+        "${INSTALL_DIR}/.venv/bin/pip" install --quiet \
+        --no-index \
+        --find-links "${INSTALL_DIR}/wheels/" \
+        -r "${INSTALL_DIR}/backend/requirements.txt"
+    log "Backend requirements installed (offline)."
 else
-    git clone --branch "$REPO_BRANCH" "$REPO_URL" "$INSTALL_DIR" \
-        || die "Failed to clone repository from $REPO_URL"
+    log "No offline package found — cloning from GitHub..."
+    if [ -d "$INSTALL_DIR" ]; then
+        cd "$INSTALL_DIR"
+        git pull origin "$REPO_BRANCH" || log "Warning: git pull failed, using existing code."
+    else
+        git clone --branch "$REPO_BRANCH" "$REPO_URL" "$INSTALL_DIR" \
+            || die "Failed to clone from $REPO_URL — no internet and no offline package found."
+    fi
+    chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
+
+    log "Creating Python virtual environment..."
+    sudo -u "$SERVICE_USER" python3 -m venv "${INSTALL_DIR}/.venv"
+
+    log "Installing backend requirements from PyPI..."
+    sudo -u "$SERVICE_USER" \
+        "${INSTALL_DIR}/.venv/bin/pip" install --quiet \
+        -r "${INSTALL_DIR}/backend/requirements.txt"
+    log "Backend requirements installed."
 fi
-chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
-log "Repository cloned to $INSTALL_DIR."
 
 # =============================================================================
-# 8. Python virtual environment and backend dependencies
+# 8. PaddleOCR (requires internet — too large for boot partition)
 # =============================================================================
 
-log "Creating Python virtual environment..."
-sudo -u "$SERVICE_USER" python3 -m venv "${INSTALL_DIR}/.venv"
-
-log "Installing backend requirements..."
-sudo -u "$SERVICE_USER" \
-    "${INSTALL_DIR}/.venv/bin/pip" install --quiet \
-    -r "${INSTALL_DIR}/backend/requirements.txt"
-log "Backend requirements installed."
-
-# =============================================================================
-# 9. PaddleOCR (large download — patience required)
-# =============================================================================
-
-log "Installing PaddleOCR (this takes 15-20 minutes on first run)..."
+log "Installing PaddleOCR (15-20 minutes, requires internet)..."
 if sudo -u "$SERVICE_USER" \
     "${INSTALL_DIR}/.venv/bin/pip" install --quiet paddlepaddle paddleocr; then
     log "PaddleOCR installed successfully."
 else
-    log "WARNING: PaddleOCR installation failed."
-    log "The server will still run — all timing events will go to the ambiguity queue."
-    log "You can retry later: cd $INSTALL_DIR && source .venv/bin/activate && pip install paddlepaddle paddleocr"
+    log "WARNING: PaddleOCR installation failed (no internet, or ARM64 wheels unavailable)."
+    log "The server will run with MockDetector — all timing events go to the ambiguity queue."
+    log "Retry later: sudo -u ${SERVICE_USER} ${INSTALL_DIR}/.venv/bin/pip install paddlepaddle paddleocr"
 fi
 
 # =============================================================================
