@@ -1,5 +1,19 @@
 # RaceWrangler POC Scope Document
 
+## Status
+
+This document covers two phases of POC work:
+
+- **Phase 0 (complete):** Software-only POC — hardcoded cars, simulated triggers, browser
+  camera, no hardware. Built to demonstrate the timing workflow concept.
+- **Phase 1 (in progress):** Hardware test event POC — real IR beam triggers, Pi Zero
+  cameras, MotorsportsReg entry import, run group assignment, OCR identification, human
+  ambiguity resolution. Target: live autocross event in April 2026.
+
+Sections 1–9 below describe the Phase 0 software POC. See Section 10 for Phase 1 scope.
+
+---
+
 ## Purpose
 This Proof‑of‑Concept (POC) demonstrates the core innovation of RaceWrangler’s timing and scoring system:  
 **eliminating false triggers by putting humans in the loop at the right moments, while giving timing trailer workers the tools they actually use during an event.**
@@ -208,9 +222,9 @@ This tells the story cleanly and visually.
 
 ---
 
-# 9. Success Criteria
+# 9. Success Criteria (Phase 0)
 
-The POC is successful if:
+The Phase 0 POC is successful if:
 
 - A run can be started with a photo  
 - A run can be finished by selecting that photo  
@@ -218,4 +232,64 @@ The POC is successful if:
 - Timing UI allows penalties, DNF, and aborted marking  
 - The workflow clearly demonstrates how RaceWrangler avoids false triggers  
 - The demo feels like a real timing trailer workflow  
+
+---
+
+# 10. Phase 1: Hardware Test Event POC
+
+## 10.1 Goals
+
+Deploy RaceWrangler at a live autocross event. The system must:
+
+1. Ingest a competitor entry list from a MotorsportsReg CSV export
+2. Allow the admin to assign competitors to run groups (by class default, per-driver override)
+3. Automatically capture timing events via IR beam sensors + Pi Zero cameras at start and finish
+4. Identify competitors from timing photos using OCR
+5. Present unresolved identifications to the timing worker for human review
+
+## 10.2 Hardware
+
+| Component | Role |
+|-----------|------|
+| Raspberry Pi 5 (4–8 GB) | Server: backend, OCR, WiFi AP, NTP |
+| Pi Zero 2W × 2 | RaceSpy cameras at start and finish lines |
+| Raspberry Pi Global Shutter Camera × 2 | Timing photos (eliminates rolling shutter) |
+| LM393 Photodiode Module × 2 | IR beam trigger sensors |
+| IR LED emitter × 2 | Beam source across timing lane |
+| 4× status LEDs per RaceSpy | WiFi / server / armed / fault indicators |
+
+## 10.3 New Features Required (not in Phase 0)
+
+| Feature | Blocking Spec |
+|---------|---------------|
+| MotorsportsReg CSV import | `docs/entry-import/motorsportsreg-csv-spec.md` (needs CSV sample) |
+| Run group assignment UI | `docs/features/run-group-assignment-ux.md` |
+| Camera registration (QR code role assignment) | `docs/hardware/pi-zero-camera-firmware-spec.md` |
+| Timing event intake API | `docs/hardware/pi-zero-camera-firmware-spec.md` |
+| OCR integration with backend | `docs/ocr/backend-integration-spec.md` |
+| Ambiguity resolution UI | `docs/features/ambiguity-resolution-ux.md` |
+| Pi 5 server setup (AP, DNS, NTP, services) | `docs/hardware/pi5-server-setup.md` |
+| RaceSpy firmware script | `docs/hardware/pi-zero-camera-firmware-spec.md` |
+
+## 10.4 Phase 1 Non-Goals (Deferred to Phase 2)
+
+- Worker authentication (DeviceSession)
+- Finalization and results locking
+- PAX / series scoring
+- LoRa or RS-485 transport (hill climb)
+- DS3231 RTC or GPS timestamps
+- Multi-event support
+- Corner worker audio mesh
+
+## 10.5 Phase 1 Success Criteria
+
+The Phase 1 POC is successful if:
+
+- [ ] Entry list loaded from MotorsportsReg CSV, competitors visible in admin UI
+- [ ] All competitors assigned to run groups before the event
+- [ ] Both RaceSpies boot automatically, connect to WiFi, register via QR, and show armed LEDs
+- [ ] A car crossing the finish beam creates a timing event in the system
+- [ ] At least 70% of timing events are auto-identified by OCR without human intervention
+- [ ] Unresolved events appear in the ambiguity queue and can be resolved by the timing worker
+- [ ] Run times are visible in the Timing & Scoring UI during the event
 

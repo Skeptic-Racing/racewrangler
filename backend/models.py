@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text, BigInteger, Date
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -62,3 +62,88 @@ class SystemState(Base):
     id = Column(Integer, primary_key=True, default=1)
     is_start_held = Column(Boolean, default=False, nullable=False)
     finish_triggered_at = Column(DateTime, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 models
+# ---------------------------------------------------------------------------
+
+class Event(Base):
+    """A timed motorsport event."""
+    __tablename__ = "events"
+
+    id = Column(String(36), primary_key=True)
+    name = Column(String(200), nullable=False)
+    date = Column(Date, nullable=True)
+    status = Column(String(20), default="setup", nullable=False)  # setup | active | complete
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    run_groups = relationship("RunGroup", back_populates="event", cascade="all, delete-orphan")
+    competitors = relationship("Competitor", back_populates="event", cascade="all, delete-orphan")
+    timing_events = relationship("TimingEvent", back_populates="event", cascade="all, delete-orphan")
+
+
+class RunGroup(Base):
+    """A named group of competitors who run together in sequence."""
+    __tablename__ = "run_groups"
+
+    id = Column(String(36), primary_key=True)
+    event_id = Column(String(36), ForeignKey("events.id"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    order = Column(Integer, default=0, nullable=False)
+
+    event = relationship("Event", back_populates="run_groups")
+    competitors = relationship("Competitor", back_populates="run_group")
+
+
+class Competitor(Base):
+    """A driver+car combination entered in an event."""
+    __tablename__ = "competitors"
+
+    id = Column(String(36), primary_key=True)
+    event_id = Column(String(36), ForeignKey("events.id"), nullable=False, index=True)
+    number = Column(String(10), nullable=False)      # Preserves leading zeros (e.g. "007")
+    class_code = Column(String(20), nullable=False)  # Normalized class code (e.g. "STR")
+    driver_name = Column(String(200), nullable=False)
+    car_description = Column(String(200), nullable=True)
+    run_group_id = Column(String(36), ForeignKey("run_groups.id"), nullable=True, index=True)
+
+    event = relationship("Event", back_populates="competitors")
+    run_group = relationship("RunGroup", back_populates="competitors")
+
+
+class Camera(Base):
+    """A registered RaceSpy camera unit."""
+    __tablename__ = "cameras"
+
+    id = Column(String(36), primary_key=True)  # UUID from firmware config, stable across reboots
+    event_id = Column(String(36), ForeignKey("events.id"), nullable=True, index=True)
+    role = Column(String(10), nullable=True)    # start | finish | null
+    # pending = waiting for QR scan; registered = QR scanned, not yet armed; armed = active
+    status = Column(String(20), default="pending", nullable=False)
+    firmware_version = Column(String(50), nullable=True)
+    last_seen_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TimingEvent(Base):
+    """A raw timing capture POSTed by a RaceSpy camera."""
+    __tablename__ = "timing_events"
+
+    id = Column(String(36), primary_key=True)
+    event_id = Column(String(36), ForeignKey("events.id"), nullable=False, index=True)
+    camera_id = Column(String(36), ForeignKey("cameras.id"), nullable=False)
+    role = Column(String(10), nullable=False)            # start | finish
+    timestamp_utc_ms = Column(BigInteger, nullable=False)
+    timestamp_monotonic_ns = Column(BigInteger, nullable=False)
+    sequence_number = Column(Integer, nullable=False)
+    image_path = Column(String(500), nullable=True)      # Path on disk; not stored as blob
+    ocr_result_json = Column(Text, nullable=True)        # Full OCR output as JSON
+    # auto = OCR matched; tentative = low confidence match; needs_review = human required
+    match_status = Column(String(20), nullable=True)
+    matched_competitor_id = Column(String(36), ForeignKey("competitors.id"), nullable=True)
+    resolved_by = Column(String(10), nullable=True)      # ocr | human
+    resolved_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    event = relationship("Event", back_populates="timing_events")

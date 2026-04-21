@@ -6,6 +6,9 @@ import os
 from database import init_db, engine
 from models import Base
 from routes.runs import router as runs_router
+from routes.cameras import router as cameras_router
+from routes.events import router as events_router
+from routes.timing_events import router as timing_events_router
 from seed_data import seed_database
 
 # Create FastAPI app
@@ -24,7 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize database
+# Initialize database and OCR
 @app.on_event("startup")
 def startup_event():
     """Initialize database on startup."""
@@ -32,9 +35,24 @@ def startup_event():
     seed_database()
     print("✓ Database initialized and seeded")
 
+    from services.ocr_service import initialize_ocr
+    initialize_ocr()
 
-# Include routers
+
+# Phase 0 POC routes (existing frontend)
 app.include_router(runs_router, prefix="/api", tags=["runs"])
+
+# Phase 1 hardware routes
+app.include_router(cameras_router, prefix="/api/cameras", tags=["cameras"])
+app.include_router(events_router, prefix="/api/v1/events", tags=["events"])
+
+# Timing events are nested under /api/v1/events/{event_id}.
+# FastAPI passes {event_id} from the prefix path into each handler automatically.
+app.include_router(
+    timing_events_router,
+    prefix="/api/v1/events/{event_id}",
+    tags=["timing"],
+)
 
 # Serve photos statically
 photos_dir = os.path.join(os.path.dirname(__file__), "..", "storage", "photos")
