@@ -205,42 +205,31 @@ log "chrony configured."
 PACKAGE_ARCHIVE="/boot/firmware/racewrangler-server.tar.gz"
 
 if [ -f "$PACKAGE_ARCHIVE" ]; then
-    log "Found offline package archive — installing without internet..."
+    log "Found package archive — extracting source code..."
     mkdir -p "$INSTALL_DIR"
     tar -xzf "$PACKAGE_ARCHIVE" -C "$INSTALL_DIR"
     chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
     log "Code extracted to $INSTALL_DIR."
-
-    log "Creating Python virtual environment..."
-    sudo -u "$SERVICE_USER" python3 -m venv "${INSTALL_DIR}/.venv"
-
-    log "Installing backend requirements from bundled wheels..."
-    sudo -u "$SERVICE_USER" \
-        "${INSTALL_DIR}/.venv/bin/pip" install --quiet \
-        --no-index \
-        --find-links "${INSTALL_DIR}/wheels/" \
-        -r "${INSTALL_DIR}/backend/requirements.txt"
-    log "Backend requirements installed (offline)."
 else
-    log "No offline package found — cloning from GitHub..."
+    log "No package archive found — cloning from GitHub..."
     if [ -d "$INSTALL_DIR" ]; then
         cd "$INSTALL_DIR"
         git pull origin "$REPO_BRANCH" || log "Warning: git pull failed, using existing code."
     else
         git clone --branch "$REPO_BRANCH" "$REPO_URL" "$INSTALL_DIR" \
-            || die "Failed to clone from $REPO_URL — no internet and no offline package found."
+            || die "Failed to clone from $REPO_URL — no internet and no package archive found."
     fi
     chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
-
-    log "Creating Python virtual environment..."
-    sudo -u "$SERVICE_USER" python3 -m venv "${INSTALL_DIR}/.venv"
-
-    log "Installing backend requirements from PyPI..."
-    sudo -u "$SERVICE_USER" \
-        "${INSTALL_DIR}/.venv/bin/pip" install --quiet \
-        -r "${INSTALL_DIR}/backend/requirements.txt"
-    log "Backend requirements installed."
 fi
+
+log "Creating Python virtual environment..."
+sudo -u "$SERVICE_USER" python3 -m venv "${INSTALL_DIR}/.venv"
+
+log "Installing backend requirements from PyPI..."
+sudo -u "$SERVICE_USER" \
+    "${INSTALL_DIR}/.venv/bin/pip" install --quiet \
+    -r "${INSTALL_DIR}/backend/requirements.txt"
+log "Backend requirements installed."
 
 # =============================================================================
 # 8. PaddleOCR (requires internet — too large for boot partition)
