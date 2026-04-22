@@ -34,7 +34,7 @@ set -euo pipefail
 # CONFIGURATION — edit these before copying to the SD card
 # =============================================================================
 
-WIFI_PASSPHRASE="timing"   # Change this. Same in all RaceSpy configs.
+WIFI_PASSPHRASE="timing01"   # Change this. Same in all RaceSpy configs.
 WIFI_SSID="RaceWrangler-Timing"
 WIFI_CHANNEL="6"
 AP_IP="192.168.10.1"

@@ -39,7 +39,7 @@ set -euo pipefail
 # =============================================================================
 
 WIFI_SSID="RaceWrangler-Timing"
-WIFI_PASSPHRASE="timing"       # Must match pi5-first-boot.sh WIFI_PASSPHRASE
+WIFI_PASSPHRASE="timing01"     # Must match pi5-first-boot.sh WIFI_PASSPHRASE
 SERVER_HOSTNAME="racewrangler" # Do not change — must match Pi 5 dnsmasq config
 CAMERA_ROLE="start"            # "start" or "finish" — label for this unit
 
