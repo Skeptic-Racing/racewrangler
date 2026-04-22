@@ -279,6 +279,7 @@ Wants=network-online.target
 
 [Service]
 User=${SERVICE_USER}
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 WorkingDirectory=${INSTALL_DIR}/backend
 ExecStart=${INSTALL_DIR}/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 80
 Restart=always
