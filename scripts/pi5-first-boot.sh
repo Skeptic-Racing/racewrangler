@@ -137,6 +137,13 @@ rsn_pairwise=CCMP
 EOF
 
 sed -i 's|#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
+
+# Unblock WiFi radio — soft-blocked by default on fresh Pi OS, persists across reboots via udev rule
+rfkill unblock wifi
+cat > /etc/udev/rules.d/10-rfkill-unblock.rules << 'EOF'
+SUBSYSTEM=="rfkill", ATTR{type}=="wlan", ATTR{soft}="0"
+EOF
+
 systemctl unmask hostapd
 systemctl enable hostapd
 log "hostapd configured (SSID: ${WIFI_SSID})."
