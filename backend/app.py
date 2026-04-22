@@ -60,26 +60,23 @@ os.makedirs(photos_dir, exist_ok=True)
 app.mount("/photos", StaticFiles(directory=photos_dir), name="photos")
 
 
-@app.get("/")
-def read_root():
-    """Root endpoint."""
-    return {
-        "message": "Race Wrangler API",
-        "docs": "/docs",
-        "endpoints": {
-            "cars": "GET /api/cars",
-            "start_run": "POST /api/start",
-            "finish_run": "POST /api/finish",
-            "list_runs": "GET /api/runs",
-            "update_run": "POST /api/runs/{run_id}/update"
-        }
-    }
-
-
 @app.get("/health")
 def health():
     """Health check endpoint."""
     return {"status": "ok"}
+
+
+# Serve the React frontend — must be mounted last so API routes take priority.
+# FRONTEND_DIR can be overridden via environment variable for dev vs production.
+_default_frontend = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+frontend_dir = os.environ.get("FRONTEND_DIR", _default_frontend)
+
+if os.path.isdir(frontend_dir):
+    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+else:
+    @app.get("/")
+    def read_root():
+        return {"message": "RaceWrangler API — frontend not built. Run: cd frontend && npm run build"}
 
 
 if __name__ == "__main__":

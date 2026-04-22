@@ -30,6 +30,17 @@ echo ""
 mkdir -p "$DIST_DIR"
 rm -f "$ARCHIVE"
 
+echo "Building frontend..."
+if [ -f "${REPO_ROOT}/frontend/package.json" ]; then
+    cd "${REPO_ROOT}/frontend"
+    npm install --silent
+    npm run build --silent
+    cd "${REPO_ROOT}"
+    echo "Frontend built: $(du -sh "${REPO_ROOT}/frontend/dist" | cut -f1)"
+else
+    echo "WARNING: frontend/package.json not found — skipping frontend build"
+fi
+
 echo "Bundling source code..."
 tar -czf "$ARCHIVE" \
     -C "$REPO_ROOT" \
@@ -39,8 +50,11 @@ tar -czf "$ARCHIVE" \
     --exclude="*.db" \
     --exclude="*.pyc" \
     --exclude="output" \
+    --exclude="frontend/node_modules" \
+    --exclude="frontend/src" \
     backend/ \
-    ocr_poc/
+    ocr_poc/ \
+    frontend/dist/
 
 ARCHIVE_SIZE=$(du -sh "$ARCHIVE" | cut -f1)
 echo ""
