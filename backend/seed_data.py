@@ -26,24 +26,17 @@ def load_cars_from_json():
 
 
 def seed_database():
-    """Seed the database with cars from the hardcoded list."""
-    # Initialize tables
+    """Seed the database with cars from the hardcoded list (POC only)."""
     init_db()
-    
-    # Get or create session
     db = SessionLocal()
-    
     try:
-        # Check if cars already exist
         existing_count = db.query(Car).count()
         if existing_count > 0:
-            print(f"Database already has {existing_count} cars. Skipping seed.")
             return
-        
-        # Load cars from JSON
-        cars_data = load_cars_from_json()
-        
-        # Insert cars
+        try:
+            cars_data = load_cars_from_json()
+        except FileNotFoundError:
+            return
         for car_data in cars_data:
             car = Car(
                 id=car_data.get("id"),
@@ -52,14 +45,11 @@ def seed_database():
                 model=car_data.get("model")
             )
             db.add(car)
-        
         db.commit()
-        print(f"Successfully seeded {len(cars_data)} cars into the database.")
-        
+        print(f"Seeded {len(cars_data)} cars.")
     except Exception as e:
         db.rollback()
         print(f"Error seeding database: {e}")
-        raise
     finally:
         db.close()
 
