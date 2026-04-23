@@ -80,7 +80,7 @@ fi
 
 echo "=== RaceWrangler SD Card Configurator ==="
 echo "Type  : $TYPE"
-[[ "$TYPE" == "pi-zero" ]] && echo "Role  : $ROLE"
+
 echo "Mount : $MOUNT"
 echo ""
 
