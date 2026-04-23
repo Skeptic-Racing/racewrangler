@@ -20,7 +20,7 @@ router = APIRouter()
 
 class EventCreateRequest(BaseModel):
     name: str
-    date: Optional[date] = None
+    date: Optional[str] = None   # ISO date string "YYYY-MM-DD"; converted in handler
     timing_mode: str = "human"
 
 
@@ -81,10 +81,17 @@ class CompetitorResponse(BaseModel):
 
 @router.post("")
 def create_event(payload: EventCreateRequest, db: Session = Depends(get_db)):
+    event_date = None
+    if payload.date:
+        try:
+            event_date = date.fromisoformat(payload.date)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="date must be YYYY-MM-DD")
+
     event = Event(
         id=str(uuid.uuid4()),
         name=payload.name,
-        date=payload.date,
+        date=event_date,
         status="setup",
         timing_mode=payload.timing_mode,
     )
