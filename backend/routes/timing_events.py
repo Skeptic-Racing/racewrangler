@@ -95,6 +95,14 @@ def ingest_timing_event(
     db.commit()
     db.refresh(te)
 
+    # In racespy mode, advance the staging queue immediately.
+    if event.timing_mode == "racespy":
+        from routes.staged_runs import handle_start_timing_event, handle_finish_timing_event
+        if payload.role == "start":
+            handle_start_timing_event(event_id, te.id, payload.timestamp_utc_ms, db)
+        elif payload.role == "finish":
+            handle_finish_timing_event(event_id, te.id, payload.timestamp_utc_ms, db)
+
     # Run OCR in the background — does not block the response.
     if image_bytes:
         background_tasks.add_task(_process_ocr, te.id, event_id, image_bytes)

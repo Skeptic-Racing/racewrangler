@@ -76,11 +76,14 @@ class Event(Base):
     name = Column(String(200), nullable=False)
     date = Column(Date, nullable=True)
     status = Column(String(20), default="setup", nullable=False)  # setup | active | complete
+    # human = manual start/finish buttons; racespy = RaceSpy triggers + staging worker
+    timing_mode = Column(String(20), default="human", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     run_groups = relationship("RunGroup", back_populates="event", cascade="all, delete-orphan")
     competitors = relationship("Competitor", back_populates="event", cascade="all, delete-orphan")
     timing_events = relationship("TimingEvent", back_populates="event", cascade="all, delete-orphan")
+    staged_runs = relationship("StagedRun", back_populates="event", cascade="all, delete-orphan")
 
 
 class RunGroup(Base):
@@ -147,3 +150,27 @@ class TimingEvent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     event = relationship("Event", back_populates="timing_events")
+
+
+class StagedRun(Base):
+    """A run created by the staging worker before the car enters the start gate."""
+    __tablename__ = "staged_runs"
+
+    id = Column(String(36), primary_key=True)
+    event_id = Column(String(36), ForeignKey("events.id"), nullable=False, index=True)
+    competitor_id = Column(String(36), ForeignKey("competitors.id"), nullable=True, index=True)
+    # staged = waiting at start; running = start fired; finished = complete; dnf = did not finish
+    status = Column(String(20), default="staged", nullable=False)
+    image_path = Column(String(500), nullable=True)
+    ocr_result_json = Column(Text, nullable=True)
+    start_timing_event_id = Column(String(36), ForeignKey("timing_events.id"), nullable=True)
+    finish_timing_event_id = Column(String(36), ForeignKey("timing_events.id"), nullable=True)
+    start_time_utc_ms = Column(BigInteger, nullable=True)
+    finish_time_utc_ms = Column(BigInteger, nullable=True)
+    raw_time_ms = Column(BigInteger, nullable=True)   # finish - start in ms
+    penalties = Column(Integer, default=0)
+    staged_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    event = relationship("Event", back_populates="staged_runs")
+    competitor = relationship("Competitor")

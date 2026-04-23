@@ -3,10 +3,11 @@ import { StarterUI } from './components/StarterUI';
 import { FinishWorkerUI } from './components/FinishWorkerUI';
 import { TimingAndScoringUI } from './components/TimingAndScoringUI';
 import { AdminUI } from './components/AdminUI';
-import { getFinishTriggerStatus, Run, triggerFinish } from './services/api';
+import { StagingUI } from './components/StagingUI';
+import { getFinishTriggerStatus, Run, triggerFinish, type Event } from './services/api';
 import './styles/main.css';
 
-type TabType = 'starter' | 'finish' | 'timing' | 'admin';
+type TabType = 'starter' | 'finish' | 'staging' | 'timing' | 'admin';
 
 interface Toast {
   id: number;
@@ -15,130 +16,111 @@ interface Toast {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<TabType>('starter');
+  const [activeTab, setActiveTab] = useState<TabType>('admin');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [finishTriggered, setFinishTriggered] = useState(false);
   const [finishTriggeredAt, setFinishTriggeredAt] = useState<string | null>(null);
+  const [activeEvent, setActiveEvent] = useState<Event | null>(null);
   const toastIdRef = useRef(0);
 
   useEffect(() => {
     let mounted = true;
-
-    const syncFinishTrigger = async () => {
+    const sync = async () => {
       try {
         const status = await getFinishTriggerStatus();
         if (mounted) {
           setFinishTriggered(status.is_finish_triggered);
           setFinishTriggeredAt(status.is_finish_triggered ? status.finish_triggered_at : null);
         }
-      } catch {
-        // Ignore transient polling failures to avoid noisy toasts.
-      }
+      } catch {}
     };
-
-    syncFinishTrigger();
-    const interval = setInterval(syncFinishTrigger, 500);
-
-    return () => {
-      mounted = false;
-      clearInterval(interval);
-    };
+    sync();
+    const interval = setInterval(sync, 500);
+    return () => { mounted = false; clearInterval(interval); };
   }, []);
 
-  // Show toast notification
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     const id = toastIdRef.current++;
     setToasts(prev => [...prev, { id, message, type }]);
-
-    // Auto-remove toast after 5 seconds
-    setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
-    }, 5000);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000);
   };
 
-  // Handlers
-  const handleRunStarted = (run: Run) => {
-    showToast(`✓ Run #${run.id} started for car #${run.car?.number}`, 'success');
-  };
-
-  const handleRunFinished = (run: Run) => {
-    showToast(
-      `✓ Run #${run.id} finished (${run.raw_time?.toFixed(3)}s)`,
-      'success'
-    );
-  };
-
-  const handleRunUpdated = (run: Run) => {
-    showToast(`✓ Run #${run.id} updated`, 'success');
-  };
-
-  const handleError = (message: string) => {
-    showToast(message, 'error');
-  };
+  const handleRunStarted = (run: Run) => showToast(`✓ Run started for car #${run.car?.number}`, 'success');
+  const handleRunFinished = (run: Run) => showToast(`✓ Run finished (${run.raw_time?.toFixed(3)}s)`, 'success');
+  const handleRunUpdated = (_run: Run) => {};
+  const handleError = (msg: string) => showToast(msg, 'error');
+  const handleSuccess = (msg: string) => showToast(msg, 'success');
 
   const handleTriggerFinish = async () => {
     try {
       const status = await triggerFinish();
       setFinishTriggered(status.is_finish_triggered);
       setFinishTriggeredAt(status.finish_triggered_at);
-    } catch (error) {
-      handleError(`Failed to trigger finish: ${error}`);
-    }
+    } catch (e) { handleError(`Failed to trigger finish: ${e}`); }
   };
+  void handleTriggerFinish; // kept for FinishWorkerUI passthrough — suppress unused warning
+
+  const timingMode = activeEvent?.timing_mode ?? 'human';
+  const isRaceSpy = timingMode === 'racespy';
+
+  const tabs: { id: TabType; label: string; show: boolean }[] = [
+    { id: 'admin',   label: '⚙️ Admin',           show: true },
+    { id: 'staging', label: '📋 Staging',          show: isRaceSpy },
+    { id: 'starter', label: '👤 Starter',          show: !isRaceSpy },
+    { id: 'finish',  label: '🏁 Finish Worker',    show: !isRaceSpy },
+    { id: 'timing',  label: '⏱️ Timing & Scoring', show: true },
+  ];
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f5f5f5' }}>
-      {/* Header */}
-      <header style={{
-        backgroundColor: '#333',
-        color: 'white',
-        padding: '20px',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-      }}>
-        <div className="container">
-          <h1 style={{ margin: 0, fontSize: '28px' }}>🏁 Race Wrangler POC</h1>
-          <p style={{ margin: '8px 0 0 0', color: '#aaa', fontSize: '14px' }}>
-            Motorsports Timing & Scoring System
-          </p>
+      <header style={{ backgroundColor: '#111827', color: 'white', padding: '14px 20px', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
+        <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: 24 }}>🏁 Race Wrangler</h1>
+            {activeEvent && (
+              <p style={{ margin: '2px 0 0', fontSize: 13, color: '#9ca3af' }}>
+                {activeEvent.name}
+                <span style={{ marginLeft: 8, padding: '1px 6px', borderRadius: 10,
+                  background: activeEvent.status === 'active' ? '#065f46' : '#374151', fontSize: 11 }}>
+                  {activeEvent.status}
+                </span>
+                <span style={{ marginLeft: 4, padding: '1px 6px', borderRadius: 10, background: '#1e3a8a', fontSize: 11 }}>
+                  {timingMode}
+                </span>
+              </p>
+            )}
+          </div>
+          {!activeEvent && (
+            <p style={{ margin: 0, color: '#d97706', fontSize: 13 }}>⚠ No event selected — go to Admin</p>
+          )}
         </div>
       </header>
 
-      {/* Navigation tabs */}
-      <div className="container" style={{ paddingTop: '20px' }}>
+      <div className="container" style={{ paddingTop: 16 }}>
         <nav className="nav-tabs">
-          <button
-            className={activeTab === 'starter' ? 'active' : ''}
-            onClick={() => setActiveTab('starter')}
-          >
-            👤 Starter UI
-          </button>
-          <button
-            className={activeTab === 'finish' ? 'active' : ''}
-            onClick={() => setActiveTab('finish')}
-          >
-            🏁 Finish Worker UI
-          </button>
-          <button
-            className={activeTab === 'timing' ? 'active' : ''}
-            onClick={() => setActiveTab('timing')}
-          >
-            ⏱️ Timing & Scoring
-          </button>
-          <button
-            className={activeTab === 'admin' ? 'active' : ''}
-            onClick={() => setActiveTab('admin')}
-          >
-            ⚙️ Admin
-          </button>
+          {tabs.filter(t => t.show).map(t => (
+            <button key={t.id} className={activeTab === t.id ? 'active' : ''} onClick={() => setActiveTab(t.id)}>
+              {t.label}
+            </button>
+          ))}
         </nav>
       </div>
 
-      {/* Main content */}
-      <main className="container" style={{ minHeight: 'calc(100vh - 180px)' }}>
+      <main className="container" style={{ minHeight: 'calc(100vh - 180px)', paddingBottom: 40 }}>
+        {activeTab === 'admin' && (
+          <AdminUI
+            activeEvent={activeEvent}
+            onEventChange={setActiveEvent}
+            onError={handleError}
+            onSuccess={handleSuccess}
+          />
+        )}
+        {activeTab === 'staging' && (
+          <StagingUI activeEvent={activeEvent} onError={handleError} onSuccess={handleSuccess} />
+        )}
         {activeTab === 'starter' && (
           <StarterUI onRunStarted={handleRunStarted} onError={handleError} />
         )}
-
         {activeTab === 'finish' && (
           <FinishWorkerUI
             finishTriggered={finishTriggered}
@@ -147,43 +129,16 @@ function App() {
             onError={handleError}
           />
         )}
-
         {activeTab === 'timing' && (
-          <TimingAndScoringUI onRunUpdated={handleRunUpdated} onError={handleError} />
-        )}
-
-        {activeTab === 'admin' && (
-          <AdminUI
-            finishTriggered={finishTriggered}
-            onTriggerFinish={handleTriggerFinish}
-            onResetDone={(message) => showToast(message, 'success')}
-            onError={handleError}
-          />
+          <TimingAndScoringUI activeEvent={activeEvent} onRunUpdated={handleRunUpdated} onError={handleError} />
         )}
       </main>
 
-      {/* Toast notifications */}
       <div className="toast-container">
         {toasts.map(toast => (
-          <div key={toast.id} className={`toast ${toast.type}`}>
-            {toast.message}
-          </div>
+          <div key={toast.id} className={`toast ${toast.type}`}>{toast.message}</div>
         ))}
       </div>
-
-      {/* Footer */}
-      <footer style={{
-        backgroundColor: '#f9f9f9',
-        borderTop: '1px solid #ddd',
-        padding: '20px',
-        textAlign: 'center',
-        color: '#666',
-        fontSize: '12px'
-      }}>
-        <div className="container">
-          <p>Race Wrangler POC v0.1.0 | Local-First Timing & Scoring</p>
-        </div>
-      </footer>
     </div>
   );
 }

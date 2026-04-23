@@ -54,3 +54,4 @@ ocr_poc/reports/
 Thumbs.db
 docs/ocr/test_images/
 dist/
+*/dev_data/

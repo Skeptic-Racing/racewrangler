@@ -1,24 +1,63 @@
 import { useState, useEffect } from 'react';
-import { deleteRun, getHoldStatus, getRuns, holdStart, releaseStart, updateRun, Run } from '../services/api';
+import {
+  deleteRun, getHoldStatus, getRuns, holdStart, releaseStart, updateRun, Run,
+  getAmbiguityQueue, resolveAmbiguity, listCompetitors,
+  type Event, type TimingEventItem, type Competitor,
+} from '../services/api';
 import { formatUtcTimeWithMs } from '../utils/time';
 
 interface TimingAndScoringUIProps {
+  activeEvent: Event | null;
   onRunUpdated: (run: Run) => void;
   onError: (message: string) => void;
 }
 
-export function TimingAndScoringUI({ onRunUpdated, onError }: TimingAndScoringUIProps) {
+export function TimingAndScoringUI({ activeEvent, onRunUpdated, onError }: TimingAndScoringUIProps) {
   const [runs, setRuns] = useState<Run[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeFilter, setActiveFilter] = useState<'active' | 'completed'>('active');
   const [isStartHeld, setIsStartHeld] = useState(false);
 
+  // Ambiguity queue
+  const [ambiguityQueue, setAmbiguityQueue] = useState<TimingEventItem[]>([]);
+  const [competitors, setCompetitors] = useState<Competitor[]>([]);
+  const [showAmbiguity, setShowAmbiguity] = useState(false);
+  const [resolving, setResolving] = useState<string | null>(null);
+
   // Load all runs
   useEffect(() => {
     loadRuns();
-    const interval = setInterval(loadRuns, 1500); // Refresh every 1.5 seconds
+    const interval = setInterval(loadRuns, 1500);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!activeEvent) return;
+    loadAmbiguityQueue();
+    loadCompetitors();
+    const interval = setInterval(loadAmbiguityQueue, 5000);
+    return () => clearInterval(interval);
+  }, [activeEvent]);
+
+  async function loadAmbiguityQueue() {
+    if (!activeEvent) return;
+    try { setAmbiguityQueue(await getAmbiguityQueue(activeEvent.id)); } catch {}
+  }
+
+  async function loadCompetitors() {
+    if (!activeEvent) return;
+    try { setCompetitors(await listCompetitors(activeEvent.id)); } catch {}
+  }
+
+  async function handleResolve(item: TimingEventItem, action: 'select' | 'skip' | 'unknown', competitor_id?: string) {
+    if (!activeEvent) return;
+    setResolving(item.id);
+    try {
+      await resolveAmbiguity(activeEvent.id, item.id, action, competitor_id);
+      await loadAmbiguityQueue();
+    } catch (e) { onError(`${e}`); }
+    finally { setResolving(null); }
+  }
 
   async function loadRuns() {
     try {
@@ -26,7 +65,7 @@ export function TimingAndScoringUI({ onRunUpdated, onError }: TimingAndScoringUI
       setRuns(fetchedRuns);
       setIsStartHeld(holdStatus.is_start_held);
     } catch (error) {
-      onError(`Failed to load runs: ${error}`);
+      // Ignore transient errors
     }
   }
 
@@ -144,6 +183,71 @@ export function TimingAndScoringUI({ onRunUpdated, onError }: TimingAndScoringUI
 
   return (
     <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
+
+      {/* Ambiguity Queue Banner */}
+      {activeEvent && ambiguityQueue.length > 0 && (
+        <div style={{ marginBottom: 12, padding: '10px 16px', background: '#fef3c7', border: '1px solid #d97706', borderRadius: 8, cursor: 'pointer' }}
+          onClick={() => setShowAmbiguity(v => !v)}>
+          <strong>⚠️ {ambiguityQueue.length} timing event{ambiguityQueue.length !== 1 ? 's' : ''} need identification</strong>
+          <span style={{ marginLeft: 8, fontSize: 13, color: '#92400e' }}>{showAmbiguity ? '▲ Hide' : '▼ Review'}</span>
+        </div>
+      )}
+
+      {/* Ambiguity Queue Panel */}
+      {showAmbiguity && activeEvent && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div className="card-header">Ambiguity Queue</div>
+          <div style={{ padding: 12 }}>
+            {ambiguityQueue.map(item => {
+              return (
+                <div key={item.id} style={{ border: '1px solid #e5e7eb', borderRadius: 8, marginBottom: 12, overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', gap: 12, padding: 12 }}>
+                    {item.image_path && (
+                      <img src={`/api/v1/events/${activeEvent.id}/timing-events/${item.id}/image`}
+                        alt="trigger" style={{ width: 120, height: 80, objectFit: 'cover', borderRadius: 4 }}
+                        onError={e => (e.currentTarget.style.display = 'none')} />
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, color: '#555', marginBottom: 6 }}>
+                        <strong>{item.role.toUpperCase()}</strong> — {new Date(item.timestamp_utc_ms).toLocaleTimeString()}
+                        {item.ocr_detail?.raw_text && <span style={{ marginLeft: 8 }}>OCR: "{item.ocr_detail.raw_text}"</span>}
+                      </div>
+                      {item.suggested_competitor && (
+                        <div style={{ fontSize: 13, padding: '4px 8px', background: '#eff6ff', borderRadius: 4, marginBottom: 6, display: 'inline-block' }}>
+                          Suggested: <strong>#{item.suggested_competitor.number} {item.suggested_competitor.class_code}</strong> — {item.suggested_competitor.driver_name}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                        {item.suggested_competitor && (
+                          <button disabled={resolving === item.id}
+                            onClick={() => handleResolve(item, 'select', item.suggested_competitor!.id)}
+                            style={{ padding: '4px 12px', background: '#1a56db', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 13 }}>
+                            ✓ Confirm #{item.suggested_competitor.number}
+                          </button>
+                        )}
+                        <select onChange={e => { if (e.target.value) handleResolve(item, 'select', e.target.value); }}
+                          style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #ccc', fontSize: 13 }}>
+                          <option value="">Select competitor…</option>
+                          {competitors.map(c => <option key={c.id} value={c.id}>#{c.number} {c.class_code} — {c.driver_name}</option>)}
+                        </select>
+                        <button disabled={resolving === item.id} onClick={() => handleResolve(item, 'skip')}
+                          style={{ padding: '4px 10px', background: '#f3f4f6', border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', fontSize: 13 }}>
+                          Skip
+                        </button>
+                        <button disabled={resolving === item.id} onClick={() => handleResolve(item, 'unknown')}
+                          style={{ padding: '4px 10px', background: '#fee2e2', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 13 }}>
+                          Unknown
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="card">
         <div className="card-header">Timing & Scoring UI</div>
 

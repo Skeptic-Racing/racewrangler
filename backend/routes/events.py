@@ -1,8 +1,10 @@
 """Event, RunGroup, and Competitor management."""
+import csv
+import io
 import uuid
 from datetime import datetime, date
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -99,6 +101,23 @@ def list_events(db: Session = Depends(get_db)):
 @router.get("/{event_id}")
 def get_event(event_id: str, db: Session = Depends(get_db)):
     event = _get_event_or_404(event_id, db)
+    return {"success": True, "data": _event_dict(event)}
+
+
+@router.patch("/{event_id}")
+def update_event(event_id: str, payload: dict, db: Session = Depends(get_db)):
+    event = _get_event_or_404(event_id, db)
+    if "status" in payload:
+        if payload["status"] not in ("setup", "active", "complete"):
+            raise HTTPException(status_code=422, detail="status must be setup, active, or complete")
+        event.status = payload["status"]
+    if "timing_mode" in payload:
+        if payload["timing_mode"] not in ("human", "racespy"):
+            raise HTTPException(status_code=422, detail="timing_mode must be human or racespy")
+        event.timing_mode = payload["timing_mode"]
+    if "name" in payload:
+        event.name = payload["name"]
+    db.commit()
     return {"success": True, "data": _event_dict(event)}
 
 
@@ -284,6 +303,71 @@ def update_competitor(
     return {"success": True, "data": _competitor_dict(comp)}
 
 
+@router.post("/{event_id}/competitors/import")
+async def import_competitors_csv(
+    event_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Import competitors from a MotorsportsReg CSV export."""
+    _get_event_or_404(event_id, db)
+
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")  # strip BOM if present
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+
+    reader = csv.DictReader(io.StringIO(text))
+    rows = list(reader)
+
+    imported = 0
+    skipped = 0
+    errors = []
+
+    for i, row in enumerate(rows):
+        try:
+            number = (row.get("No.") or "").strip()
+            class_code = (row.get("Class") or "").strip()
+            first = (row.get("First Name") or "").strip()
+            last = (row.get("Last Name") or "").strip()
+            driver_name = f"{first} {last}".strip() if first or last else "Unknown"
+            car_desc = (row.get("Vehicle Year/Make/Model") or "").strip()
+
+            if not number or not class_code:
+                skipped += 1
+                continue
+
+            # Idempotent: skip if same number+class already exists for this event
+            existing = db.query(Competitor).filter(
+                Competitor.event_id == event_id,
+                Competitor.number == number,
+                Competitor.class_code == class_code,
+            ).first()
+            if existing:
+                skipped += 1
+                continue
+
+            comp = Competitor(
+                id=str(uuid.uuid4()),
+                event_id=event_id,
+                number=number,
+                class_code=class_code,
+                driver_name=driver_name,
+                car_description=car_desc or None,
+            )
+            db.add(comp)
+            imported += 1
+        except Exception as e:
+            errors.append(f"Row {i + 2}: {e}")
+
+    db.commit()
+    return {
+        "success": True,
+        "data": {"imported": imported, "skipped": skipped, "errors": errors},
+    }
+
+
 @router.delete("/{event_id}/competitors/{competitor_id}")
 def delete_competitor(event_id: str, competitor_id: str, db: Session = Depends(get_db)):
     comp = _get_competitor_or_404(event_id, competitor_id, db)
@@ -327,6 +411,7 @@ def _event_dict(e: Event) -> dict:
         "name": e.name,
         "date": e.date.isoformat() if e.date else None,
         "status": e.status,
+        "timing_mode": e.timing_mode,
         "created_at": e.created_at.isoformat() if e.created_at else None,
     }
 

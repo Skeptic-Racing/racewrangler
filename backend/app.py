@@ -9,6 +9,7 @@ from routes.runs import router as runs_router
 from routes.cameras import router as cameras_router
 from routes.events import router as events_router
 from routes.timing_events import router as timing_events_router
+from routes.staged_runs import router as staged_runs_router
 from seed_data import seed_database
 
 # Create FastAPI app
@@ -52,6 +53,11 @@ app.include_router(
     timing_events_router,
     prefix="/api/v1/events/{event_id}",
     tags=["timing"],
+)
+app.include_router(
+    staged_runs_router,
+    prefix="/api/v1/events/{event_id}",
+    tags=["staged_runs"],
 )
 
 # Serve photos statically
