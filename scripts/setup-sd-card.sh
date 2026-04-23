@@ -12,11 +12,8 @@
 #   Pi 5 server:
 #     bash scripts/setup-sd-card.sh --type pi5 --mount /mnt/j
 #
-#   Pi Zero RaceSpy (start line):
-#     bash scripts/setup-sd-card.sh --type pi-zero --role start --mount /mnt/k
-#
-#   Pi Zero RaceSpy (finish line):
-#     bash scripts/setup-sd-card.sh --type pi-zero --role finish --mount /mnt/l
+#   Pi Zero RaceSpy:
+#     bash scripts/setup-sd-card.sh --type pi-zero --mount /mnt/k
 #
 # On Windows (WSL2) the SD card boot partition shows up as J:\, K:\ etc.
 # Pass it as /mnt/j, /mnt/k, etc.  Or pass the Windows path directly (J: or J:\)
@@ -42,15 +39,13 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 TYPE=""
 MOUNT=""
-ROLE="start"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --type)   TYPE="$2";  shift 2 ;;
         --mount)  MOUNT="$2"; shift 2 ;;
-        --role)   ROLE="$2";  shift 2 ;;
         -h|--help)
-            sed -n '3,30p' "$0"   # Print the usage block
+            sed -n '3,30p' "$0"
             exit 0
             ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
@@ -61,8 +56,6 @@ done
 [[ -n "$MOUNT" ]] || { echo "ERROR: --mount <path> required";     exit 1; }
 [[ "$TYPE" == "pi5" || "$TYPE" == "pi-zero" ]] \
     || { echo "ERROR: --type must be pi5 or pi-zero"; exit 1; }
-[[ "$TYPE" != "pi-zero" || "$ROLE" == "start" || "$ROLE" == "finish" ]] \
-    || { echo "ERROR: --role must be start or finish for pi-zero"; exit 1; }
 
 # ---------------------------------------------------------------------------
 # Normalize Windows paths (J: or J:\) to WSL2 /mnt/j
@@ -189,21 +182,15 @@ if [[ "$TYPE" == "pi-zero" ]]; then
     cp "${REPO_ROOT}/racespy/racespy.py" "${MOUNT}/racespy.py"
     echo "  Copied racespy.py"
 
-    # Write a role-stamped copy of the setup script so the CAMERA_ROLE
-    # variable is already set for this specific card.
-    SETUP_SRC="${REPO_ROOT}/scripts/pi-zero-first-boot.sh"
-    SETUP_DST="${MOUNT}/pi-zero-first-boot.sh"
-    sed "s/^CAMERA_ROLE=.*/CAMERA_ROLE=\"${ROLE}\"/" "$SETUP_SRC" > "$SETUP_DST"
-    echo "  Copied pi-zero-first-boot.sh (CAMERA_ROLE=${ROLE})"
+    cp "${REPO_ROOT}/scripts/pi-zero-first-boot.sh" "${MOUNT}/pi-zero-first-boot.sh"
+    echo "  Copied pi-zero-first-boot.sh"
 
     echo ""
     echo "--- Updating user-data..."
     inject_runcmd "$MOUNT" "pi-zero-first-boot.sh"
 
-    # Extract the camera_id that will be generated — we can't know it yet
-    # (it's generated during first-boot), but remind the user where to find it.
     echo ""
-    echo "=== Pi Zero (${ROLE}) SD card ready ==="
+    echo "=== Pi Zero SD card ready ==="
     echo ""
     echo "  Boot partition contents:"
     ls -lh "${MOUNT}/racespy.py" "${MOUNT}/pi-zero-first-boot.sh"
