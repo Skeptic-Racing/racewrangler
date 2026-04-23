@@ -21,6 +21,7 @@ router = APIRouter()
 class EventCreateRequest(BaseModel):
     name: str
     date: Optional[date] = None
+    timing_mode: str = "human"
 
 
 class EventResponse(BaseModel):
@@ -85,6 +86,7 @@ def create_event(payload: EventCreateRequest, db: Session = Depends(get_db)):
         name=payload.name,
         date=payload.date,
         status="setup",
+        timing_mode=payload.timing_mode,
     )
     db.add(event)
     db.commit()
