@@ -1,3 +1,4 @@
+import asyncio
 import os
 from datetime import datetime
 from typing import Optional
@@ -13,6 +14,17 @@ from schemas import (
     CarResponse,
 )
 from database import get_db
+
+
+def _broadcast(msg_type: str, data=None):
+    """Fire-and-forget broadcast from a sync route."""
+    try:
+        from ws import manager
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(manager.broadcast(msg_type, data))
+    except Exception:
+        pass
 
 router = APIRouter()
 
@@ -399,6 +411,11 @@ def trigger_finish(db: Session = Depends(get_db)):
         state.finish_triggered_at = datetime.utcnow()
 
         db.commit()
+
+        _broadcast("finish_trigger", {
+            "is_finish_triggered": True,
+            "finish_triggered_at": state.finish_triggered_at.isoformat(),
+        })
 
         return {
             "success": True,

@@ -24,19 +24,53 @@ function App() {
   const toastIdRef = useRef(0);
 
   useEffect(() => {
+    // Connect to WebSocket for real-time updates (replaces 500ms polling)
+    const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+    let ws: WebSocket | null = null;
+    let pingInterval: ReturnType<typeof setInterval>;
+    let reconnectTimeout: ReturnType<typeof setTimeout>;
     let mounted = true;
-    const sync = async () => {
-      try {
-        const status = await getFinishTriggerStatus();
-        if (mounted) {
-          setFinishTriggered(status.is_finish_triggered);
-          setFinishTriggeredAt(status.is_finish_triggered ? status.finish_triggered_at : null);
-        }
-      } catch {}
+
+    function connect() {
+      if (!mounted) return;
+      ws = new WebSocket(wsUrl);
+
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'finish_trigger') {
+            setFinishTriggered(msg.data.is_finish_triggered);
+            setFinishTriggeredAt(msg.data.is_finish_triggered ? msg.data.finish_triggered_at : null);
+          }
+        } catch {}
+      };
+
+      ws.onopen = () => {
+        // Keep-alive ping every 30s
+        pingInterval = setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send('ping'), 30000);
+        // Fetch current state once on connect in case we missed events while disconnected
+        getFinishTriggerStatus().then(s => {
+          if (!mounted) return;
+          setFinishTriggered(s.is_finish_triggered);
+          setFinishTriggeredAt(s.is_finish_triggered ? s.finish_triggered_at : null);
+        }).catch(() => {});
+      };
+
+      ws.onclose = () => {
+        clearInterval(pingInterval);
+        if (mounted) reconnectTimeout = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => ws?.close();
+    }
+
+    connect();
+    return () => {
+      mounted = false;
+      clearInterval(pingInterval);
+      clearTimeout(reconnectTimeout);
+      ws?.close();
     };
-    sync();
-    const interval = setInterval(sync, 500);
-    return () => { mounted = false; clearInterval(interval); };
   }, []);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -54,11 +88,11 @@ function App() {
   const handleTriggerFinish = async () => {
     try {
       const status = await triggerFinish();
+      // WS will push the update, but set optimistically for immediate feedback
       setFinishTriggered(status.is_finish_triggered);
       setFinishTriggeredAt(status.finish_triggered_at);
     } catch (e) { handleError(`Failed to trigger finish: ${e}`); }
   };
-  void handleTriggerFinish; // kept for FinishWorkerUI passthrough — suppress unused warning
 
   const timingMode = activeEvent?.timing_mode ?? 'human';
   const isRaceSpy = timingMode === 'racespy';
@@ -127,6 +161,7 @@ function App() {
             finishTriggeredAt={finishTriggeredAt}
             onRunFinished={handleRunFinished}
             onError={handleError}
+            onTriggerFinish={handleTriggerFinish}
           />
         )}
         {activeTab === 'timing' && (

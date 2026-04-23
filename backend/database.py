@@ -47,3 +47,9 @@ def init_db():
         if "finish_triggered_at" not in state_columns:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE system_state ADD COLUMN finish_triggered_at DATETIME"))
+
+    if "events" in inspector.get_table_names():
+        event_columns = {col["name"] for col in inspector.get_columns("events")}
+        if "timing_mode" not in event_columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE events ADD COLUMN timing_mode VARCHAR(20) NOT NULL DEFAULT 'human'"))

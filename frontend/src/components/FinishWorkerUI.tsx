@@ -7,9 +7,10 @@ interface FinishWorkerUIProps {
   finishTriggeredAt: string | null;
   onRunFinished: (run: Run) => void;
   onError: (message: string) => void;
+  onTriggerFinish?: () => Promise<void>;
 }
 
-export function FinishWorkerUI({ finishTriggered, finishTriggeredAt, onRunFinished, onError }: FinishWorkerUIProps) {
+export function FinishWorkerUI({ finishTriggered, finishTriggeredAt, onRunFinished, onError, onTriggerFinish: _onTriggerFinish }: FinishWorkerUIProps) {
   const [activeRuns, setActiveRuns] = useState<Run[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
