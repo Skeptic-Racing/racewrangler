@@ -95,12 +95,13 @@ export interface ClassSummary {
 }
 
 export interface Camera {
-  id: string;
+  camera_id: string;
   event_id: string | null;
   role: string | null;
   status: string;
   firmware_version: string | null;
   last_seen_at: string | null;
+  has_preview: boolean;
 }
 
 export interface TimingEventItem {
@@ -283,6 +284,22 @@ export async function updateCompetitor(event_id: string, competitor_id: string, 
 export async function listCameras(): Promise<Camera[]> {
   const d = await apiFetch<{ cameras: Camera[] }>(`/api/cameras`);
   return d.cameras;
+}
+
+export async function assignCamera(camera_id: string, role: 'start' | 'finish', event_id: string): Promise<Camera> {
+  return apiFetch<Camera>(`/api/cameras/${camera_id}/assign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role, event_id }),
+  });
+}
+
+export async function resetCamera(camera_id: string): Promise<Camera> {
+  return apiFetch<Camera>(`/api/cameras/${camera_id}/reset`, { method: 'POST' });
+}
+
+export function cameraPreviewUrl(camera_id: string): string {
+  return `/api/cameras/${camera_id}/preview`;
 }
 
 // ---------------------------------------------------------------------------

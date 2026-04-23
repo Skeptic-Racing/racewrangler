@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { QRCodeSVG } from 'qrcode.react';
 import {
   listEvents, createEvent, updateEvent,
   listRunGroups, createRunGroup, deleteRunGroup,
   getAssignmentSummary, bulkAssign,
   listCompetitors, updateCompetitor, importCompetitorsCSV,
-  listCameras, resetData,
+  listCameras, assignCamera, resetCamera, cameraPreviewUrl, resetData,
   type Event, type RunGroup, type Competitor, type ClassSummary, type Camera,
 } from '../services/api';
 
@@ -38,8 +37,10 @@ export function AdminUI({ activeEvent, onEventChange, onError, onSuccess }: Admi
   // Bulk assignment: class_code → run_group_id
   const [bulkMap, setBulkMap] = useState<Record<string, string>>({});
 
-  // Camera QR
-  const [qrRole, setQrRole] = useState<'start' | 'finish'>('start');
+  // Camera assignment state: camera_id → selected role/event
+  const [camRoles, setCamRoles] = useState<Record<string, 'start' | 'finish'>>({});
+  const [camEvents, setCamEvents] = useState<Record<string, string>>({});
+  const [assigning, setAssigning] = useState<string | null>(null);
 
   // CSV import
   const csvRef = useRef<HTMLInputElement>(null);
@@ -53,8 +54,15 @@ export function AdminUI({ activeEvent, onEventChange, onError, onSuccess }: Admi
     if (!activeEvent) return;
     if (tab === 'groups' || tab === 'competitors') loadGroupsAndSummary();
     if (tab === 'competitors') loadCompetitors();
-    if (tab === 'cameras') loadCameras();
   }, [activeEvent, tab]);
+
+  // Camera polling — refresh every 5s when on cameras tab
+  useEffect(() => {
+    if (tab !== 'cameras') return;
+    loadCameras();
+    const interval = setInterval(loadCameras, 5000);
+    return () => clearInterval(interval);
+  }, [tab]);
 
   async function loadEvents() {
     try { setEvents(await listEvents()); } catch (e) { onError(`${e}`); }
@@ -164,6 +172,27 @@ export function AdminUI({ activeEvent, onEventChange, onError, onSuccess }: Admi
     } catch (e) { onError(`${e}`); }
   }
 
+  async function handleAssignCamera(camera_id: string) {
+    const role = camRoles[camera_id];
+    const event_id = camEvents[camera_id] || activeEvent?.id;
+    if (!role || !event_id) { onError('Select a role and event first'); return; }
+    setAssigning(camera_id);
+    try {
+      await assignCamera(camera_id, role, event_id);
+      onSuccess(`Camera ${camera_id.slice(0, 8)} assigned as ${role}`);
+      await loadCameras();
+    } catch (e) { onError(`${e}`); }
+    finally { setAssigning(null); }
+  }
+
+  async function handleResetCamera(camera_id: string) {
+    try {
+      await resetCamera(camera_id);
+      onSuccess(`Camera ${camera_id.slice(0, 8)} reset to pending`);
+      await loadCameras();
+    } catch (e) { onError(`${e}`); }
+  }
+
   async function handleReset() {
     try {
       const r = await resetData();
@@ -171,10 +200,6 @@ export function AdminUI({ activeEvent, onEventChange, onError, onSuccess }: Admi
       setConfirmReset(false);
     } catch (e) { onError(`${e}`); }
   }
-
-  const qrPayload = activeEvent
-    ? JSON.stringify({ role: qrRole, event_id: activeEvent.id })
-    : '';
 
   const btnStyle: React.CSSProperties = { padding: '6px 14px', cursor: 'pointer', borderRadius: 4, border: '1px solid #ccc' };
   const primaryBtn: React.CSSProperties = { ...btnStyle, background: '#1a56db', color: 'white', border: 'none' };
@@ -364,46 +389,90 @@ export function AdminUI({ activeEvent, onEventChange, onError, onSuccess }: Admi
       {/* ── CAMERAS ── */}
       {tab === 'cameras' && (
         <div className="card">
-          <div className="card-header">Cameras & QR Codes</div>
+          <div className="card-header">Camera Management</div>
           <div style={{ padding: 16 }}>
-            {!activeEvent ? (
-              <p style={{ color: '#888' }}>Select an event first to generate QR codes.</p>
-            ) : (
-              <>
-                <p style={{ marginTop: 0, fontSize: 14, color: '#555' }}>
-                  Point each RaceSpy's camera at the QR code for its role. The camera will register itself and enter Armed mode.
-                </p>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-                  {(['start', 'finish'] as const).map(r => (
-                    <button key={r} onClick={() => setQrRole(r)}
-                      style={{ ...btnStyle, background: qrRole === r ? '#1a56db' : '#f3f4f6', color: qrRole === r ? 'white' : '#333', border: 'none' }}>
-                      {r === 'start' ? '🟢 Start' : '🏁 Finish'}
-                    </button>
-                  ))}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: 24, background: 'white', border: '2px solid #e5e7eb', borderRadius: 8 }}>
-                  <QRCodeSVG value={qrPayload} size={220} />
-                  <div style={{ fontWeight: 600, fontSize: 18 }}>{qrRole.toUpperCase()} LINE</div>
-                  <div style={{ fontSize: 12, color: '#888', wordBreak: 'break-all', maxWidth: 300, textAlign: 'center' }}>{qrPayload}</div>
-                </div>
-              </>
-            )}
+            <p style={{ marginTop: 0, fontSize: 14, color: '#555' }}>
+              Cameras appear here automatically when they connect and start streaming.
+              Select a role and assign each camera before starting the event.
+            </p>
 
-            <h3 style={{ marginTop: 24 }}>Registered Cameras</h3>
             {cameras.length === 0 ? (
-              <p style={{ color: '#888' }}>No cameras registered yet.</p>
+              <div style={{ textAlign: 'center', padding: 40, color: '#888', border: '2px dashed #e5e7eb', borderRadius: 8 }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📷</div>
+                <div>No cameras connected yet.</div>
+                <div style={{ fontSize: 13, marginTop: 4 }}>Power on a RaceSpy — it will appear here within seconds.</div>
+              </div>
             ) : (
-              cameras.map(cam => (
-                <div key={cam.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px',
-                  border: '1px solid #e5e7eb', borderRadius: 6, marginBottom: 6, fontSize: 13 }}>
-                  <span>{cam.role?.toUpperCase() || 'UNASSIGNED'} — <code style={{ fontSize: 11 }}>{cam.id.slice(0, 8)}</code></span>
-                  <span style={{ padding: '2px 8px', borderRadius: 12,
-                    background: cam.status === 'active' ? '#def7ec' : cam.status === 'registered' ? '#fef3c7' : '#f3f4f6',
-                    color: cam.status === 'active' ? '#03543f' : cam.status === 'registered' ? '#92400e' : '#555' }}>
-                    {cam.status}
-                  </span>
-                </div>
-              ))
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+                {cameras.map(cam => {
+                  const cid = cam.camera_id;
+                  const isOnline = cam.has_preview;
+                  const selectedRole = camRoles[cid] || cam.role as 'start' | 'finish' | null || 'start';
+                  const selectedEvent = camEvents[cid] || activeEvent?.id || '';
+
+                  return (
+                    <div key={cid} style={{ border: `2px solid ${cam.status === 'assigned' ? '#1a56db' : isOnline ? '#e5e7eb' : '#f3f4f6'}`, borderRadius: 8, overflow: 'hidden', background: 'white' }}>
+                      {/* Preview image */}
+                      <div style={{ position: 'relative', background: '#111', height: 160 }}>
+                        {isOnline ? (
+                          <img
+                            src={`${cameraPreviewUrl(cid)}?t=${Date.now()}`}
+                            alt="camera preview"
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            onError={e => (e.currentTarget.style.display = 'none')}
+                          />
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#666', fontSize: 13 }}>
+                            No signal
+                          </div>
+                        )}
+                        {/* Status badge */}
+                        <div style={{ position: 'absolute', top: 6, right: 6, padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600,
+                          background: cam.status === 'assigned' ? '#1a56db' : isOnline ? '#065f46' : '#374151',
+                          color: 'white' }}>
+                          {cam.status === 'assigned' ? `✓ ${cam.role?.toUpperCase()}` : isOnline ? '● LIVE' : '○ OFFLINE'}
+                        </div>
+                      </div>
+
+                      {/* Controls */}
+                      <div style={{ padding: 12 }}>
+                        <div style={{ fontSize: 12, color: '#888', marginBottom: 8, fontFamily: 'monospace' }}>
+                          {cid.slice(0, 16)}…
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                          <select value={selectedRole}
+                            onChange={e => setCamRoles(r => ({ ...r, [cid]: e.target.value as 'start' | 'finish' }))}
+                            style={{ flex: 1, padding: '5px 8px', borderRadius: 4, border: '1px solid #ccc', fontSize: 13 }}>
+                            <option value="start">🟢 Start</option>
+                            <option value="finish">🏁 Finish</option>
+                          </select>
+                          {events.length > 1 && (
+                            <select value={selectedEvent}
+                              onChange={e => setCamEvents(ev => ({ ...ev, [cid]: e.target.value }))}
+                              style={{ flex: 1, padding: '5px 8px', borderRadius: 4, border: '1px solid #ccc', fontSize: 13 }}>
+                              {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+                            </select>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button
+                            onClick={() => handleAssignCamera(cid)}
+                            disabled={assigning === cid || !selectedEvent}
+                            style={{ flex: 1, padding: '6px', background: '#1a56db', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 13 }}>
+                            {assigning === cid ? 'Assigning…' : cam.status === 'assigned' ? 'Reassign' : 'Assign'}
+                          </button>
+                          {cam.status === 'assigned' && (
+                            <button onClick={() => handleResetCamera(cid)}
+                              style={{ padding: '6px 10px', background: '#fee2e2', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12, color: '#c81e1e' }}>
+                              Reset
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         </div>
