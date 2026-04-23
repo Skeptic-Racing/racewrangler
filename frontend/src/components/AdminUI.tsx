@@ -173,9 +173,10 @@ export function AdminUI({ activeEvent, onEventChange, onError, onSuccess }: Admi
   }
 
   async function handleAssignCamera(camera_id: string) {
-    const role = camRoles[camera_id];
+    const cam = cameras.find(c => c.camera_id === camera_id);
+    const role = camRoles[camera_id] || (cam?.role as 'start' | 'finish' | null) || 'start';
     const event_id = camEvents[camera_id] || activeEvent?.id;
-    if (!role || !event_id) { onError('Select a role and event first'); return; }
+    if (!event_id) { onError('Select an event first'); return; }
     setAssigning(camera_id);
     try {
       await assignCamera(camera_id, role, event_id);
