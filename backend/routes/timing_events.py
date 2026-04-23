@@ -63,15 +63,18 @@ def ingest_timing_event(
         raise HTTPException(status_code=422, detail="role must be 'start' or 'finish'")
 
     # Save image to disk.
+    _MAX_IMAGE_BYTES = 4 * 1024 * 1024  # 4 MB decoded ceiling
     image_path: Optional[str] = None
     image_bytes: Optional[bytes] = None
     if payload.image_base64:
-        try:
-            image_bytes = base64.b64decode(payload.image_base64)
-            image_path = _save_image(event_id, payload.sequence_number, payload.camera_id, image_bytes)
-        except Exception as exc:
-            # Bad image data should not block the timing event record.
-            print(f"Warning: failed to save timing event image: {exc}")
+        if len(payload.image_base64) > (_MAX_IMAGE_BYTES * 4 // 3 + 64):
+            print(f"Warning: image_base64 too large ({len(payload.image_base64)} chars), skipping")
+        else:
+            try:
+                image_bytes = base64.b64decode(payload.image_base64)
+                image_path = _save_image(event_id, payload.sequence_number, payload.camera_id, image_bytes)
+            except Exception as exc:
+                print(f"Warning: failed to save timing event image: {exc}")
 
     # Persist the TimingEvent immediately so the RaceSpy gets a fast 200 OK.
     te = TimingEvent(
@@ -204,7 +207,7 @@ def resolve_ambiguity(
         if not comp:
             raise HTTPException(status_code=404, detail="Competitor not found")
         te.matched_competitor_id = payload.competitor_id
-        te.match_status = "auto"
+        te.match_status = "human"
         te.resolved_by = "human"
         te.resolved_at = datetime.utcnow()
 

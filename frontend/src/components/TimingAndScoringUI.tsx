@@ -23,6 +23,7 @@ export function TimingAndScoringUI({ activeEvent, onRunUpdated, onError }: Timin
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [showAmbiguity, setShowAmbiguity] = useState(false);
   const [resolving, setResolving] = useState<string | null>(null);
+  const [serverReachable, setServerReachable] = useState(true);
 
   // Load all runs
   useEffect(() => {
@@ -41,7 +42,12 @@ export function TimingAndScoringUI({ activeEvent, onRunUpdated, onError }: Timin
 
   async function loadAmbiguityQueue() {
     if (!activeEvent) return;
-    try { setAmbiguityQueue(await getAmbiguityQueue(activeEvent.id)); } catch {}
+    try {
+      setAmbiguityQueue(await getAmbiguityQueue(activeEvent.id));
+      setServerReachable(true);
+    } catch {
+      setServerReachable(false);
+    }
   }
 
   async function loadCompetitors() {
@@ -249,7 +255,10 @@ export function TimingAndScoringUI({ activeEvent, onRunUpdated, onError }: Timin
       )}
 
       <div className="card">
-        <div className="card-header">Timing & Scoring UI</div>
+        <div className="card-header">
+          Timing & Scoring UI
+          {!serverReachable && <span style={{ marginLeft: 10, fontSize: 12, color: '#dc2626', fontWeight: 'normal' }}>⚠ server unreachable</span>}
+        </div>
 
         <div style={{ marginBottom: '12px' }}>
           <button

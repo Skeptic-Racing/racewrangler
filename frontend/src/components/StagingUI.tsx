@@ -26,6 +26,7 @@ export function StagingUI({ activeEvent, onError, onSuccess }: StagingUIProps) {
   const [scanResult, setScanResult] = useState<OCRScanResult | null>(null);
   const [selectedCompetitorId, setSelectedCompetitorId] = useState<string | null>(null);
   const [staging, setStaging] = useState(false);
+  const [serverReachable, setServerReachable] = useState(true);
 
   const [queue, setQueue] = useState<StagedRun[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
@@ -47,12 +48,17 @@ export function StagingUI({ activeEvent, onError, onSuccess }: StagingUIProps) {
 
   async function loadQueue() {
     if (!activeEvent) return;
-    try { setQueue(await listStagedRuns(activeEvent.id)); } catch {}
+    try {
+      setQueue(await listStagedRuns(activeEvent.id));
+      setServerReachable(true);
+    } catch {
+      setServerReachable(false);
+    }
   }
 
   async function loadCompetitors() {
     if (!activeEvent) return;
-    try { setCompetitors(await listCompetitors(activeEvent.id)); } catch {}
+    try { setCompetitors(await listCompetitors(activeEvent.id)); } catch (e) { onError(`Failed to load competitors: ${e}`); }
   }
 
   async function startCamera() {
@@ -163,7 +169,10 @@ export function StagingUI({ activeEvent, onError, onSuccess }: StagingUIProps) {
       {/* Left: capture + confirm */}
       <div>
         <div className="card">
-          <div className="card-header">Staging Worker — {activeEvent.name}</div>
+          <div className="card-header">
+            Staging Worker — {activeEvent.name}
+            {!serverReachable && <span style={{ marginLeft: 10, fontSize: 12, color: '#dc2626', fontWeight: 'normal' }}>⚠ server unreachable</span>}
+          </div>
           <div style={{ padding: 16 }}>
 
             {stage === 'capture' && (

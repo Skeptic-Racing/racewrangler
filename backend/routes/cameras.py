@@ -41,11 +41,19 @@ def _camera_to_response(cam: Camera) -> dict:
     }
 
 
+@router.get("")
+def list_cameras(db: Session = Depends(get_db)):
+    """List all registered cameras."""
+    cameras = db.query(Camera).order_by(Camera.created_at).all()
+    return {"success": True, "data": {"cameras": [_camera_to_response(c) for c in cameras]}}
+
+
 @router.post("/register")
 def register_camera(payload: CameraRegisterRequest, db: Session = Depends(get_db)):
     """
     Called by a RaceSpy at boot after scanning a role QR code.
     Idempotent: re-registering the same camera_id for the same event updates its role.
+    Warns if camera is already active on a different event.
     """
     if payload.role not in ("start", "finish"):
         raise HTTPException(status_code=422, detail="role must be 'start' or 'finish'")
@@ -58,6 +66,9 @@ def register_camera(payload: CameraRegisterRequest, db: Session = Depends(get_db
     if cam is None:
         cam = Camera(id=payload.camera_id)
         db.add(cam)
+    elif cam.event_id and cam.event_id != payload.event_id and cam.status == "active":
+        # Camera is live on a different event — allow reassignment but flag it
+        print(f"Warning: camera {payload.camera_id} reassigned from event {cam.event_id} to {payload.event_id}")
 
     cam.event_id = payload.event_id
     cam.role = payload.role

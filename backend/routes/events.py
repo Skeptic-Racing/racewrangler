@@ -333,6 +333,7 @@ async def import_competitors_csv(
     imported = 0
     skipped = 0
     errors = []
+    new_competitors = []
 
     for i, row in enumerate(rows):
         try:
@@ -357,23 +358,31 @@ async def import_competitors_csv(
                 skipped += 1
                 continue
 
-            comp = Competitor(
+            new_competitors.append(Competitor(
                 id=str(uuid.uuid4()),
                 event_id=event_id,
                 number=number,
                 class_code=class_code,
                 driver_name=driver_name,
                 car_description=car_desc or None,
-            )
-            db.add(comp)
+            ))
             imported += 1
         except Exception as e:
             errors.append(f"Row {i + 2}: {e}")
 
+    # Only commit if no errors — caller gets a clean all-or-nothing import
+    if errors:
+        return {
+            "success": False,
+            "data": {"imported": 0, "skipped": skipped, "errors": errors},
+        }
+
+    for comp in new_competitors:
+        db.add(comp)
     db.commit()
     return {
         "success": True,
-        "data": {"imported": imported, "skipped": skipped, "errors": errors},
+        "data": {"imported": imported, "skipped": skipped, "errors": []},
     }
 
 

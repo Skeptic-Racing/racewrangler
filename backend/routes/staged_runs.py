@@ -57,6 +57,9 @@ async def ocr_scan(
     """Run OCR on an image and return candidates without creating a staged run."""
     from services.ocr_service import run_ocr
 
+    _MAX_IMAGE_BYTES = 4 * 1024 * 1024
+    if len(payload.image_base64) > (_MAX_IMAGE_BYTES * 4 // 3 + 64):
+        raise HTTPException(status_code=422, detail="image_base64 exceeds 4 MB limit")
     image_bytes = base64.b64decode(payload.image_base64)
     competitors = db.query(Competitor).filter(Competitor.event_id == event_id).all()
     candidates = [
@@ -104,8 +107,11 @@ def create_staged_run(
     if not comp:
         raise HTTPException(status_code=404, detail="Competitor not found")
 
+    _MAX_IMAGE_BYTES = 4 * 1024 * 1024
     image_path = None
     if payload.image_base64:
+        if len(payload.image_base64) > (_MAX_IMAGE_BYTES * 4 // 3 + 64):
+            raise HTTPException(status_code=422, detail="image_base64 exceeds 4 MB limit")
         try:
             image_bytes = base64.b64decode(payload.image_base64)
             image_path = _save_staging_image(event_id, image_bytes)
