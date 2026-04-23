@@ -103,16 +103,46 @@ log "System packages installed."
 # =============================================================================
 # 2. Static IP on wlan0
 # =============================================================================
+# Pi OS Trixie uses NetworkManager, not dhcpcd. We tell NM to leave wlan0
+# alone (hostapd owns it), then assign the IP via a dedicated systemd service
+# that runs after hostapd and before dnsmasq.
 
-log "Configuring static IP on wlan0..."
-cat >> /etc/dhcpcd.conf << EOF
+log "Configuring static IP on wlan0 (NetworkManager unmanaged + systemd)..."
 
-# RaceWrangler timing AP
-interface wlan0
-    static ip_address=${AP_IP}/24
-    nohook wpa_supplicant
+# Tell NetworkManager not to touch wlan0
+mkdir -p /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/10-unmanaged-wlan0.conf << EOF
+[keyfile]
+unmanaged-devices=interface-name:wlan0
 EOF
-log "Static IP configured: ${AP_IP}"
+
+# Systemd service that assigns the IP after hostapd brings wlan0 up
+cat > /etc/systemd/system/wlan0-static-ip.service << EOF
+[Unit]
+Description=Assign static IP to wlan0 timing AP
+After=hostapd.service
+Requires=hostapd.service
+Before=dnsmasq.service
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/ip addr replace ${AP_IP}/24 dev wlan0
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# dnsmasq drop-in: don't start until wlan0 has its IP
+mkdir -p /etc/systemd/system/dnsmasq.service.d
+cat > /etc/systemd/system/dnsmasq.service.d/after-wlan0.conf << EOF
+[Unit]
+After=wlan0-static-ip.service
+Requires=wlan0-static-ip.service
+EOF
+
+systemctl enable wlan0-static-ip
+log "Static IP configured: ${AP_IP} (via wlan0-static-ip.service)"
 
 # =============================================================================
 # 3. hostapd — WiFi access point
