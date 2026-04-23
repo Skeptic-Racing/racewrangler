@@ -88,9 +88,9 @@ class State(Enum):
 
 DEFAULT_CONFIG = {
     "camera_id": str(uuid.uuid4()),
-    "server_url": "http://racewrangler",
+    "server_url": "http://racewrangler.local",
     "wifi_ssid": "RaceWrangler-Timing",
-    "ntp_server": "racewrangler",
+    "ntp_server": "racewrangler.local",
     "trigger_gpio": 17,
     "led_wifi_gpio": 27,
     "led_server_gpio": 22,

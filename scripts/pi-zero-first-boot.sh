@@ -40,7 +40,7 @@ set -euo pipefail
 
 WIFI_SSID="RaceWrangler-Timing"
 WIFI_PASSPHRASE="timing01"     # Must match pi5-first-boot.sh WIFI_PASSPHRASE
-SERVER_HOSTNAME="racewrangler" # Do not change — must match Pi 5 dnsmasq config
+SERVER_HOSTNAME="racewrangler.local" # Works on both timing AP (dnsmasq) and home network (mDNS)
 CAMERA_ROLE="start"            # "start" or "finish" — label for this unit
 
 INSTALL_DIR="/opt/racespy"
@@ -108,21 +108,19 @@ fi
 # =============================================================================
 # 3. WiFi configuration
 # =============================================================================
+# Pi OS uses NetworkManager. The home network was already added by Pi Imager.
+# We add the timing AP as a lower-priority fallback — NM connects to whichever
+# is in range, preferring home WiFi when both are available.
 
-log "Configuring WiFi..."
-cat > /etc/wpa_supplicant/wpa_supplicant.conf << EOF
-ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-update_config=1
-country=US
-
-network={
-    ssid="${WIFI_SSID}"
-    psk="${WIFI_PASSPHRASE}"
-    key_mgmt=WPA-PSK
-}
-EOF
-chmod 600 /etc/wpa_supplicant/wpa_supplicant.conf
-log "WiFi configured for SSID: ${WIFI_SSID}"
+log "Adding RaceWrangler-Timing as fallback WiFi network..."
+nmcli con add type wifi \
+    con-name "RaceWrangler-Timing" \
+    ssid "${WIFI_SSID}" \
+    wifi-sec.key-mgmt wpa-psk \
+    wifi-sec.psk "${WIFI_PASSPHRASE}" \
+    connection.autoconnect yes \
+    connection.autoconnect-priority -10
+log "RaceWrangler-Timing added (lower priority than home network)."
 
 # =============================================================================
 # 4. chrony — sync to Pi 5 server
