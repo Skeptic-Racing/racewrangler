@@ -15,8 +15,13 @@
 #
 #   3. Copy THIS FILE to /boot/firmware/pi-zero-first-boot.sh
 #
-#   4. Edit WIFI_PASSPHRASE and WIFI_SSID below to match the Pi 5 timing AP.
-#      Edit CAMERA_ROLE to "start" or "finish" for this unit.
+#   4. Edit the CONFIGURATION section below:
+#        - WIFI_SSID / WIFI_PASSPHRASE             → Pi 5 timing AP (must match pi5-first-boot.sh)
+#        - CAMERA_ROLE                             → "start" or "finish" for this unit
+#        - HOME_WIFI_SSID / HOME_WIFI_PASSPHRASE  → home/shop WiFi (two options):
+#            Option A: set these variables here → script adds home WiFi at priority 100
+#            Option B: configure WiFi in Pi Imager → leave these blank, Imager handles it
+#          Either way, home WiFi is preferred over the timing AP when in range.
 #
 #   5. Add to /boot/firmware/user-data (cloud-init runcmd section):
 #        runcmd:
@@ -38,8 +43,15 @@ set -euo pipefail
 # CONFIGURATION — edit before copying to SD card
 # =============================================================================
 
+# Home/shop WiFi — Pi Zero connects here for development and pre-event prep.
+# The RaceWrangler server must be reachable on this network (via Ethernet on the Pi 5).
+HOME_WIFI_SSID=""              # e.g. "MyHomeNetwork"
+HOME_WIFI_PASSPHRASE=""        # leave blank if open network (unusual)
+
+# Timing AP — Pi 5 broadcasts this at the event. Must match pi5-first-boot.sh.
 WIFI_SSID="RaceWrangler-Timing"
-WIFI_PASSPHRASE="timing01"     # Must match pi5-first-boot.sh WIFI_PASSPHRASE
+WIFI_PASSPHRASE="timing01"
+
 SERVER_HOSTNAME="racewrangler.local" # Works on both timing AP (dnsmasq) and home network (mDNS)
 CAMERA_ROLE="start"            # "start" or "finish" — label for this unit
 
@@ -51,7 +63,7 @@ SERVICE_USER="racespy"
 # =============================================================================
 
 LOG_FILE="/boot/firmware/racespy-setup.log"
-MARKER_FILE="/etc/racespy-setup-complete"
+MARKER_FILE="/boot/firmware/racespy-setup-complete"
 
 exec > >(tee -a "$LOG_FILE") 2>&1
 
@@ -75,6 +87,25 @@ log "============================================="
 # =============================================================================
 # 1. System packages
 # =============================================================================
+
+log "Waiting for network (WiFi association can lag behind cloud-init runcmd)..."
+for i in $(seq 1 36); do
+    if curl -s --max-time 5 --head http://deb.debian.org >/dev/null 2>&1; then
+        log "Network is up (attempt ${i})."
+        break
+    fi
+    if [ "${i}" -eq 36 ]; then
+        log "--- Network diagnostics ---"
+        ip addr show wlan0 2>&1 | while IFS= read -r line; do log "  $line"; done
+        nmcli device status 2>&1 | while IFS= read -r line; do log "  $line"; done
+        nmcli connection show 2>&1 | while IFS= read -r line; do log "  $line"; done
+        rfkill list 2>&1 | while IFS= read -r line; do log "  $line"; done
+        log "---------------------------"
+        die "Network not available after 3 minutes — see diagnostics above."
+    fi
+    log "  No network yet, waiting 5s... (${i}/36)"
+    sleep 5
+done
 
 log "Syncing clock..."
 HTTP_DATE=$(curl -sI --max-time 5 http://google.com | grep -i '^date:' | cut -d' ' -f2- | tr -d '\r' || true)
@@ -105,14 +136,44 @@ if ! id "$SERVICE_USER" &>/dev/null; then
     log "Created user $SERVICE_USER."
 fi
 
+# Allow racespy user to reboot without a password (needed for SSH-based reboot)
+echo "${SERVICE_USER} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/racespy-nopasswd
+chmod 440 /etc/sudoers.d/racespy-nopasswd
+log "Passwordless sudo configured for ${SERVICE_USER}."
+
 # =============================================================================
 # 3. WiFi configuration
 # =============================================================================
-# Pi OS uses NetworkManager. The home network was already added by Pi Imager.
-# We add the timing AP as a lower-priority fallback — NM connects to whichever
-# is in range, preferring home WiFi when both are available.
+# The timing AP is always added at priority -10 (lowest).
+# The home network can be added two ways — pick one:
+#   A) Set HOME_WIFI_SSID/PASSPHRASE below → this script adds it at priority 100.
+#   B) Configure WiFi in Pi Imager → NM adds it at priority 0.
+# Either way, home WiFi beats the timing AP (-10), so NM prefers home when in range
+# and auto-roams to the timing AP at the event.
 
-log "Adding RaceWrangler-Timing as fallback WiFi network..."
+if [ -n "${HOME_WIFI_SSID}" ]; then
+    log "Adding home WiFi network: ${HOME_WIFI_SSID} (priority 100)..."
+    if [ -n "${HOME_WIFI_PASSPHRASE}" ]; then
+        nmcli con add type wifi \
+            con-name "Home-WiFi" \
+            ssid "${HOME_WIFI_SSID}" \
+            wifi-sec.key-mgmt wpa-psk \
+            wifi-sec.psk "${HOME_WIFI_PASSPHRASE}" \
+            connection.autoconnect yes \
+            connection.autoconnect-priority 100
+    else
+        nmcli con add type wifi \
+            con-name "Home-WiFi" \
+            ssid "${HOME_WIFI_SSID}" \
+            connection.autoconnect yes \
+            connection.autoconnect-priority 100
+    fi
+    log "Home WiFi added."
+else
+    log "HOME_WIFI_SSID is blank — assuming home network was configured via Pi Imager."
+fi
+
+log "Adding RaceWrangler-Timing as fallback WiFi network (priority -10)..."
 nmcli con add type wifi \
     con-name "RaceWrangler-Timing" \
     ssid "${WIFI_SSID}" \
@@ -120,7 +181,7 @@ nmcli con add type wifi \
     wifi-sec.psk "${WIFI_PASSPHRASE}" \
     connection.autoconnect yes \
     connection.autoconnect-priority -10
-log "RaceWrangler-Timing added (lower priority than home network)."
+log "RaceWrangler-Timing added."
 
 # =============================================================================
 # 4. chrony — sync to Pi 5 server
@@ -164,6 +225,7 @@ cat > "${INSTALL_DIR}/config.json" << EOF
   "debounce_seconds": 2.0,
   "exposure_time_us": 400,
   "jpeg_quality": 85,
+  "flip": true,
   "role": null,
   "event_id": null
 }
@@ -188,6 +250,26 @@ log "RaceSpy firmware installed. camera_id=${CAMERA_ID}"
 log "Role label (human reference only): ${CAMERA_ROLE}"
 
 # =============================================================================
+#  Create required RaceSpy state + log directories with correct permissions
+# =============================================================================
+
+# Persistent state directory
+mkdir -p /var/lib/racespy/buffer
+chown -R "${SERVICE_USER}:${SERVICE_USER}" /var/lib/racespy
+chmod -R 755 /var/lib/racespy
+
+# Logging directory
+mkdir -p /var/log/racespy
+chown -R "${SERVICE_USER}:${SERVICE_USER}" /var/log/racespy
+chmod 755 /var/log/racespy
+
+# Runtime directory
+mkdir -p /var/run/racespy
+chown -R "${SERVICE_USER}:${SERVICE_USER}" /var/run/racespy
+chmod 755 /var/run/racespy
+
+
+# =============================================================================
 # 6. Copy firmware script
 # =============================================================================
 
@@ -200,6 +282,9 @@ if [ -f "/boot/firmware/racespy.py" ]; then
     chmod +x "$FIRMWARE_SCRIPT"
     chown "${SERVICE_USER}:${SERVICE_USER}" "$FIRMWARE_SCRIPT"
     log "Copied racespy.py from boot partition."
+
+touch /var/log/racespy.log
+chown "${SERVICE_USER}:${SERVICE_USER}" /var/log/racespy.log
 else
     log "WARNING: /boot/firmware/racespy.py not found."
     log "Place racespy.py on the boot partition before running this script."
@@ -260,8 +345,7 @@ log "Camera ID : ${CAMERA_ID}"
 log "Role label: ${CAMERA_ROLE}"
 log "Server    : http://${SERVER_HOSTNAME}"
 log ""
-log "After reboot:"
-log "  1. Connect this Pi Zero to the RaceWrangler-Timing WiFi AP"
-log "  2. The green LED will blink — scan the QR code from the web UI"
-log "  3. Once QR scanned, green+blue+yellow LEDs = ARMED"
+log "Rebooting now to start the racespy service..."
 log "============================================="
+
+reboot

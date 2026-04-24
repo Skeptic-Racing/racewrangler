@@ -4,7 +4,7 @@ RaceSpyCamera Firmware
 Raspberry Pi Zero 2W + picamera2 + LM393 photodiode trigger
 
 State machine:
-    WIFI_WAIT → NTP_SYNC → SETUP (QR scan) → ARMED → [TRIGGER → post → ARMED]
+    WIFI_WAIT → NTP_SYNC → SETUP (live preview → admin assigns role) → ARMED → [TRIGGER → post → ARMED]
 
 Config: /etc/racespy/config.json
 Buffer: /var/lib/racespy/buffer/ (payloads that failed to POST)
@@ -36,7 +36,7 @@ LOG_PATH = "/var/log/racespy.log"
 # ---------------------------------------------------------------------------
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s %(levelname)s %(message)s",
     handlers=[
         logging.StreamHandler(),
@@ -58,18 +58,12 @@ except (ImportError, Exception):
 
 try:
     from picamera2 import Picamera2
+    from libcamera import Transform
     CAMERA_AVAILABLE = True
 except (ImportError, Exception):
     CAMERA_AVAILABLE = False
     log.warning("picamera2 not available — camera capture disabled")
 
-try:
-    from pyzbar.pyzbar import decode as qr_decode
-    from PIL import Image
-    PYZBAR_AVAILABLE = True
-except (ImportError, Exception):
-    PYZBAR_AVAILABLE = False
-    log.warning("pyzbar not available — QR scanning disabled")
 
 # ---------------------------------------------------------------------------
 # State machine
@@ -99,6 +93,7 @@ DEFAULT_CONFIG = {
     "debounce_seconds": 2.0,
     "exposure_time_us": 400,
     "jpeg_quality": 85,
+    "flip": False,
     # Populated after QR scan:
     "role": None,
     "event_id": None,
@@ -160,22 +155,41 @@ class LEDSet:
             led.off()
 
     def set_wifi_wait(self):
-        """Red solid — no WiFi yet."""
-        self.all_off()
-        self.on(self.fault)
-
-    def set_ntp_sync(self):
-        """Green solid — WiFi up, syncing clock."""
-        self.all_off()
-        self.on(self.wifi)
-
-    def set_setup(self):
-        """Green blink — waiting for QR code."""
+        """Green blink — attempting WiFi connection."""
         self.all_off()
         self.blink(self.wifi)
 
+    def set_no_wifi(self):
+        """Red solid — WiFi connection timed out."""
+        self.all_off()
+        self.on(self.fault)
+
+    def set_wifi_up(self):
+        """Green solid — WiFi connected."""
+        self.all_off()
+        self.on(self.wifi)
+
+    def set_server_ready(self):
+        """Green solid + Blue blink — server reachable, awaiting QR scan."""
+        self.all_off()
+        self.on(self.wifi)
+        self.blink(self.server)
+
+    def set_registered(self):
+        """Green solid + Blue solid — QR scanned and registered."""
+        self.all_off()
+        self.on(self.wifi)
+        self.on(self.server)
+
+    def set_arming(self):
+        """Green + Blue solid + Yellow blink — arming GPIO trigger."""
+        self.all_off()
+        self.on(self.wifi)
+        self.on(self.server)
+        self.blink(self.armed)
+
     def set_armed(self):
-        """Green + Blue + Yellow solid."""
+        """Green + Blue + Yellow solid — fully armed."""
         self.all_off()
         self.on(self.wifi)
         self.on(self.server)
@@ -184,7 +198,7 @@ class LEDSet:
     def set_fault(self):
         """Red blink — unrecoverable error."""
         self.all_off()
-        self.blink(self.fault, on_time=0.25, off_time=0.25)
+        self.blink(self.fault, on_time=0.5, off_time=0.5)
 
     def set_buffered(self):
         """Armed pattern + yellow blink — payloads buffered locally."""
@@ -199,12 +213,14 @@ class LEDSet:
 # ---------------------------------------------------------------------------
 
 def wifi_is_up() -> bool:
+    # Check for any default route — works on both home WiFi (internet-connected)
+    # and the timing AP (192.168.10.1 gateway, no internet).
     try:
         result = subprocess.run(
-            ["ip", "route", "get", "1.1.1.1"],
-            capture_output=True, timeout=5,
+            ["ip", "route", "show", "default"],
+            capture_output=True, text=True, timeout=5,
         )
-        return result.returncode == 0
+        return result.returncode == 0 and bool(result.stdout.strip())
     except Exception:
         return False
 
@@ -216,6 +232,7 @@ def wait_for_wifi(leds: LEDSet, timeout: float = 300.0) -> bool:
     while time.monotonic() < deadline:
         if wifi_is_up():
             log.info("WiFi up")
+            leds.set_wifi_up()
             return True
         time.sleep(5)
     return False
@@ -245,7 +262,6 @@ def ntp_is_synced() -> bool:
 
 def wait_for_ntp(leds: LEDSet, timeout: float = 120.0) -> bool:
     log.info("Waiting for NTP sync...")
-    leds.set_ntp_sync()
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if ntp_is_synced():
@@ -267,12 +283,32 @@ class RaceSpyCamera:
         self._cfg = cfg
         self._cam = None
 
+    def _transform(self):
+        if not CAMERA_AVAILABLE:
+            return None
+        flip = self._cfg.get("flip", False)
+        return Transform(hflip=flip, vflip=flip)
+
     def open(self):
         if not CAMERA_AVAILABLE:
             return
         self._cam = Picamera2()
+        preview_cfg = self._cam.create_preview_configuration(
+            main={"size": (640, 480)},
+            transform=self._transform(),
+        )
+        self._cam.configure(preview_cfg)
+        self._cam.start()
+        log.info("Camera started in preview mode (flip=%s)", self._cfg.get("flip", False))
+
+    def switch_to_capture_mode(self):
+        """Switch to full-res fixed-exposure still mode for trigger captures."""
+        if not CAMERA_AVAILABLE or self._cam is None:
+            return
+        self._cam.stop()
         still_cfg = self._cam.create_still_configuration(
             main={"size": (3280, 2464)},
+            transform=self._transform(),
             controls={
                 "ExposureTime": self._cfg["exposure_time_us"],
                 "AnalogueGain": 4.0,
@@ -280,7 +316,7 @@ class RaceSpyCamera:
         )
         self._cam.configure(still_cfg)
         self._cam.start()
-        log.info("Camera started")
+        log.info("Camera switched to capture mode")
 
     def capture_jpeg(self) -> bytes:
         if not CAMERA_AVAILABLE or self._cam is None:
@@ -288,18 +324,6 @@ class RaceSpyCamera:
         buf = io.BytesIO()
         self._cam.capture_file(buf, format="jpeg")
         return buf.getvalue()
-
-    def capture_pil(self):
-        """Capture a frame for QR scanning."""
-        if not CAMERA_AVAILABLE or not PYZBAR_AVAILABLE or self._cam is None:
-            return None
-        try:
-            from PIL import Image as _Image
-            array = self._cam.capture_array()
-            return _Image.fromarray(array)
-        except Exception as exc:
-            log.warning("capture_pil error: %s", exc)
-            return None
 
     def close(self):
         if self._cam:
@@ -310,6 +334,13 @@ class RaceSpyCamera:
 
 # ---------------------------------------------------------------------------
 # Server communication
+
+def server_is_reachable(cfg: dict) -> bool:
+    try:
+        r = requests.get(cfg["server_url"], timeout=5)
+        return r.status_code < 500
+    except Exception:
+        return False
 # ---------------------------------------------------------------------------
 
 def register_camera(cfg: dict) -> bool:
@@ -409,51 +440,60 @@ def buffer_is_empty() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# QR scan setup mode
+# Live preview setup mode
 # ---------------------------------------------------------------------------
 
-def scan_for_qr(camera: RaceSpyCamera) -> dict | None:
-    """Capture a frame and look for a JSON QR code. Returns decoded dict or None."""
-    if not PYZBAR_AVAILABLE:
-        return None
-    img = camera.capture_pil()
-    if img is None:
-        return None
-    decoded = qr_decode(img)
-    for item in decoded:
-        try:
-            data = json.loads(item.data.decode("utf-8"))
-            if "role" in data and "event_id" in data:
-                return data
-        except Exception:
-            pass
+def push_frame(cfg: dict, jpeg: bytes) -> dict | None:
+    """POST a JPEG frame to the server. Returns the response body or None on failure."""
+    url = cfg["server_url"] + f"/api/cameras/{cfg['camera_id']}/frame"
+    try:
+        r = requests.post(url, files={"image": ("frame.jpg", jpeg, "image/jpeg")}, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as exc:
+        log.debug("push_frame error: %s", exc)
     return None
 
 
 def run_setup_mode(cfg: dict, leds: LEDSet, camera: RaceSpyCamera) -> bool:
     """
-    Blink green LED and scan for QR code until a valid role/event pair is received
-    from the server. Updates cfg in place and persists to disk. Returns True on success.
+    Push live preview frames to the server until an admin assigns a role via the web UI.
+    Updates cfg in place and persists to disk. Returns True on success.
     """
-    log.info("Entering SETUP mode — show QR code to camera")
-    leds.set_setup()
+    log.info("Entering SETUP mode — pushing preview frames, waiting for admin assignment")
+
+    while not server_is_reachable(cfg):
+        log.info("Server not reachable, waiting...")
+        leds.set_wifi_up()
+        time.sleep(5)
+
+    leds.set_server_ready()
+    log.info("Server reachable — streaming preview to admin UI")
 
     while True:
-        qr = scan_for_qr(camera)
-        if qr:
-            log.info("QR decoded: role=%s event_id=%s", qr.get("role"), qr.get("event_id"))
-            cfg["role"] = qr["role"]
-            cfg["event_id"] = qr["event_id"]
-            if register_camera(cfg):
-                log.info("Camera registered: role=%s", cfg["role"])
-                return True
-            else:
-                log.warning("Server rejected registration — red blink, retry in 5s")
-                leds.set_fault()
+        jpeg = camera.capture_jpeg()
+        if not jpeg:
+            time.sleep(1)
+            continue
+
+        response = push_frame(cfg, jpeg)
+        if response is None:
+            log.warning("Lost server connection")
+            leds.set_wifi_up()
+            while not server_is_reachable(cfg):
                 time.sleep(5)
-                leds.set_setup()
-        else:
-            time.sleep(0.5)   # Scan at ~2 fps
+            leds.set_server_ready()
+            continue
+
+        if response.get("status") == "assigned":
+            cfg["role"] = response["role"]
+            cfg["event_id"] = response["event_id"]
+            save_config(cfg)
+            log.info("Assignment received: role=%s event_id=%s", cfg["role"], cfg["event_id"])
+            leds.set_registered()
+            return True
+
+        time.sleep(1)   # ~1 fps preview
 
 
 # ---------------------------------------------------------------------------
@@ -521,9 +561,8 @@ def main():
     state = State.WIFI_WAIT
     if not wait_for_wifi(leds):
         log.error("WiFi not available after timeout — halting")
-        leds.set_fault()
-        # systemd will restart us; don't spin fast
-        time.sleep(30)
+        leds.set_no_wifi()
+        time.sleep(30)   # systemd will restart us; don't spin fast
         return
 
     state = State.NTP_SYNC
@@ -532,11 +571,19 @@ def main():
     # 2. NTP sync
     # -----------------------------------------------------------------------
     wait_for_ntp(leds)   # Warn but don't block — better to arm than sit forever
+    leds.set_wifi_up()   # Green solid — WiFi up and clock synced
 
     # -----------------------------------------------------------------------
     # 3. Open camera (done once; stays open for the event)
     # -----------------------------------------------------------------------
-    camera.open()
+    while True:
+        try:
+            camera.open()
+            break
+        except Exception as exc:
+            log.error("Camera not detected: %s — check ribbon cable. Retrying in 30s.", exc)
+            leds.set_fault()
+            time.sleep(30)
 
     # -----------------------------------------------------------------------
     # 4. Setup mode — register if not already configured
@@ -563,6 +610,8 @@ def main():
     # -----------------------------------------------------------------------
     state = State.ARMED
     log.info("=== ARMED: role=%s event_id=%s ===", cfg.get("role"), cfg.get("event_id"))
+    leds.set_arming()
+    camera.switch_to_capture_mode()
 
     handler = TriggerHandler(cfg, camera)
 
