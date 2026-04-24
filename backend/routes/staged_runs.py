@@ -61,7 +61,15 @@ async def ocr_scan(
     if len(payload.image_base64) > (_MAX_IMAGE_BYTES * 4 // 3 + 64):
         raise HTTPException(status_code=422, detail="image_base64 exceeds 4 MB limit")
     image_bytes = base64.b64decode(payload.image_base64)
-    competitors = db.query(Competitor).filter(Competitor.event_id == event_id).all()
+
+    # Restrict OCR candidates to the active run group if one is set
+    from models import Event as EventModel
+    event = db.query(EventModel).filter(EventModel.id == event_id).first()
+    comp_query = db.query(Competitor).filter(Competitor.event_id == event_id)
+    if event and event.active_run_group_id:
+        comp_query = comp_query.filter(Competitor.run_group_id == event.active_run_group_id)
+    competitors = comp_query.all()
+
     candidates = [
         {"competitor_id": c.id, "number": c.number, "class_code": c.class_code}
         for c in competitors

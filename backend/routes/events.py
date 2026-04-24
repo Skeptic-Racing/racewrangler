@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Competitor, Event, RunGroup
+from models import Competitor, Event, RunGroup, SystemState
 
 router = APIRouter()
 
@@ -395,6 +395,106 @@ def delete_competitor(event_id: str, competitor_id: str, db: Session = Depends(g
 
 
 # ---------------------------------------------------------------------------
+# Event lifecycle — start / end (server-wide active event)
+# ---------------------------------------------------------------------------
+
+def _get_system_state(db: Session) -> SystemState:
+    state = db.query(SystemState).filter(SystemState.id == 1).first()
+    if not state:
+        state = SystemState(id=1)
+        db.add(state)
+        db.commit()
+        db.refresh(state)
+    return state
+
+
+@router.post("/{event_id}/start")
+def start_event(event_id: str, db: Session = Depends(get_db)):
+    """Make this event the active event for all connected clients."""
+    event = _get_event_or_404(event_id, db)
+    event.status = "active"
+
+    state = _get_system_state(db)
+    state.active_event_id = event_id
+    db.commit()
+
+    _broadcast_event_change(event, state)
+    return {"success": True, "data": _event_dict(event)}
+
+
+@router.post("/{event_id}/end")
+def end_event(event_id: str, db: Session = Depends(get_db)):
+    """End the active event — clears server-wide active event."""
+    event = _get_event_or_404(event_id, db)
+    event.status = "complete"
+    event.active_run_group_id = None
+
+    state = _get_system_state(db)
+    if state.active_event_id == event_id:
+        state.active_event_id = None
+    db.commit()
+
+    _broadcast_event_change(None, state)
+    return {"success": True, "data": _event_dict(event)}
+
+
+# ---------------------------------------------------------------------------
+# Run group lifecycle — start
+# ---------------------------------------------------------------------------
+
+@router.post("/{event_id}/run-groups/{group_id}/start")
+def start_run_group(event_id: str, group_id: str, db: Session = Depends(get_db)):
+    """Set a run group as active for OCR filtering."""
+    event = _get_event_or_404(event_id, db)
+    _get_run_group_or_404(event_id, group_id, db)
+    event.active_run_group_id = group_id
+    db.commit()
+
+    _broadcast_run_group_change(event_id, group_id)
+    return {"success": True, "data": _event_dict(event)}
+
+
+@router.post("/{event_id}/run-groups/stop")
+def stop_run_group(event_id: str, db: Session = Depends(get_db)):
+    """Clear the active run group (use all competitors for OCR)."""
+    event = _get_event_or_404(event_id, db)
+    event.active_run_group_id = None
+    db.commit()
+
+    _broadcast_run_group_change(event_id, None)
+    return {"success": True, "data": _event_dict(event)}
+
+
+def _broadcast_event_change(event: Event | None, state: SystemState):
+    try:
+        import asyncio
+        from ws import manager
+        data = {
+            "active_event_id": state.active_event_id,
+            "event": _event_dict(event) if event else None,
+        }
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(manager.broadcast("active_event_changed", data))
+    except Exception:
+        pass
+
+
+def _broadcast_run_group_change(event_id: str, group_id: str | None):
+    try:
+        import asyncio
+        from ws import manager
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(manager.broadcast("run_group_changed", {
+                "event_id": event_id,
+                "active_run_group_id": group_id,
+            }))
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -430,6 +530,7 @@ def _event_dict(e: Event) -> dict:
         "date": e.date.isoformat() if e.date else None,
         "status": e.status,
         "timing_mode": e.timing_mode,
+        "active_run_group_id": e.active_run_group_id,
         "created_at": e.created_at.isoformat() if e.created_at else None,
     }
 

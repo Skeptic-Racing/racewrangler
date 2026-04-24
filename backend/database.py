@@ -53,3 +53,12 @@ def init_db():
         if "timing_mode" not in event_columns:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE events ADD COLUMN timing_mode VARCHAR(20) NOT NULL DEFAULT 'human'"))
+        if "active_run_group_id" not in event_columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE events ADD COLUMN active_run_group_id VARCHAR(36)"))
+
+    if "system_state" in inspector.get_table_names():
+        state_columns = {col["name"] for col in inspector.get_columns("system_state")}
+        if "active_event_id" not in state_columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE system_state ADD COLUMN active_event_id VARCHAR(36)"))

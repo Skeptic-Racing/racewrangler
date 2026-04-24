@@ -68,6 +68,25 @@ os.makedirs(photos_dir, exist_ok=True)
 app.mount("/photos", StaticFiles(directory=photos_dir), name="photos")
 
 
+@app.get("/api/active-event")
+def get_active_event(db=None):
+    """Return the currently active event for all clients."""
+    from database import SessionLocal
+    from models import SystemState, Event
+    db = SessionLocal()
+    try:
+        state = db.query(SystemState).filter(SystemState.id == 1).first()
+        if not state or not state.active_event_id:
+            return {"success": True, "data": {"event": None}}
+        event = db.query(Event).filter(Event.id == state.active_event_id).first()
+        if not event:
+            return {"success": True, "data": {"event": None}}
+        from routes.events import _event_dict
+        return {"success": True, "data": {"event": _event_dict(event)}}
+    finally:
+        db.close()
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await ws_manager.connect(websocket)

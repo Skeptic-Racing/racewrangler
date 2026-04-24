@@ -62,6 +62,7 @@ class SystemState(Base):
     id = Column(Integer, primary_key=True, default=1)
     is_start_held = Column(Boolean, default=False, nullable=False)
     finish_triggered_at = Column(DateTime, nullable=True)
+    active_event_id = Column(String(36), nullable=True)  # event live for all clients
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +79,7 @@ class Event(Base):
     status = Column(String(20), default="setup", nullable=False)  # setup | active | complete
     # human = manual start/finish buttons; racespy = RaceSpy triggers + staging worker
     timing_mode = Column(String(20), default="human", nullable=False)
+    active_run_group_id = Column(String(36), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     run_groups = relationship("RunGroup", back_populates="event", cascade="all, delete-orphan")
