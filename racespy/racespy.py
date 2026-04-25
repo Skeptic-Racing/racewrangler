@@ -348,6 +348,163 @@ def get_camera_status(cfg: dict) -> str | None:
     return None
 
 
+def collect_telemetry(cfg: dict) -> dict:
+    """Gather GPS/time-sync state and system health metrics."""
+    # --- GPS / chrony ---
+    pps_lock = False
+    pps_offset_us = None
+    gps_lock = False
+    ntp_lock = False
+    stratum = None
+    try:
+        result = subprocess.run(
+            ["chronyc", "sources", "-v"],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in result.stdout.splitlines():
+            # Lines look like: "^* PPS0   0   4   377  -0.000001234  ..."
+            if "PPS" in line:
+                parts = line.split()
+                if parts and parts[0].startswith(("^*", "^+")):
+                    pps_lock = True
+                    # offset is the 7th column (index 6) in ns
+                    try:
+                        pps_offset_us = float(parts[6]) * 1e6
+                    except (IndexError, ValueError):
+                        pass
+            if "GPS" in line or "NMEA" in line or "SHM" in line:
+                parts = line.split()
+                if parts and parts[0].startswith(("^*", "^+")):
+                    gps_lock = True
+            if line and not line.startswith("=") and "racewrangler" in line.lower():
+                parts = line.split()
+                if parts and parts[0].startswith(("^*", "^+")):
+                    ntp_lock = True
+    except Exception as exc:
+        log.debug("chronyc sources error: %s", exc)
+    try:
+        result = subprocess.run(
+            ["chronyc", "tracking"],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("Stratum"):
+                try:
+                    stratum = int(line.split(":")[1].strip())
+                except (IndexError, ValueError):
+                    pass
+    except Exception as exc:
+        log.debug("chronyc tracking error: %s", exc)
+
+    # --- Temperature ---
+    temperature_c = None
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            temperature_c = int(f.read().strip()) / 1000.0
+    except Exception:
+        pass
+
+    # --- WiFi signal ---
+    wifi_signal_dbm = None
+    try:
+        result = subprocess.run(
+            ["iwconfig", "wlan0"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            if "Signal level" in line:
+                # "Signal level=-65 dBm"
+                import re
+                m = re.search(r"Signal level=(-?\d+)", line)
+                if m:
+                    wifi_signal_dbm = int(m.group(1))
+    except Exception:
+        pass
+
+    # --- Memory ---
+    memory_usage_percent = None
+    try:
+        result = subprocess.run(
+            ["free", "-b"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("Mem:"):
+                parts = line.split()
+                total = int(parts[1])
+                used = int(parts[2])
+                if total > 0:
+                    memory_usage_percent = round(used / total * 100.0, 1)
+    except Exception:
+        pass
+
+    # --- Disk ---
+    disk_usage_percent = None
+    try:
+        result = subprocess.run(
+            ["df", "-B1", "/"],
+            capture_output=True, text=True, timeout=5,
+        )
+        lines = result.stdout.strip().splitlines()
+        if len(lines) >= 2:
+            parts = lines[1].split()
+            used = int(parts[2])
+            avail = int(parts[3])
+            total = used + avail
+            if total > 0:
+                disk_usage_percent = round(used / total * 100.0, 1)
+    except Exception:
+        pass
+
+    # --- Uptime ---
+    uptime_seconds = None
+    try:
+        with open("/proc/uptime") as f:
+            uptime_seconds = int(float(f.read().split()[0]))
+    except Exception:
+        pass
+
+    # --- Buffered payloads ---
+    buffered = len(list(BUFFER_DIR.glob("*.json"))) if BUFFER_DIR.exists() else 0
+
+    return {
+        "camera_id": cfg["camera_id"],
+        "event_id": cfg.get("event_id"),
+        "timestamp_utc_ms": int(time.time() * 1000),
+        "gps": {
+            "pps_lock": pps_lock,
+            "pps_offset_us": pps_offset_us,
+            "gps_lock": gps_lock,
+            "ntp_lock": ntp_lock,
+            "stratum": stratum,
+        },
+        "health": {
+            "temperature_c": temperature_c,
+            "wifi_signal_dbm": wifi_signal_dbm,
+            "memory_usage_percent": memory_usage_percent,
+            "disk_usage_percent": disk_usage_percent,
+            "uptime_seconds": uptime_seconds,
+        },
+        "buffered_payloads": buffered,
+    }
+
+
+def post_telemetry(cfg: dict) -> bool:
+    """POST telemetry to /api/cameras/{camera_id}/telemetry. Best-effort; failures are logged only."""
+    payload = collect_telemetry(cfg)
+    url = cfg["server_url"] + f"/api/cameras/{cfg['camera_id']}/telemetry"
+    try:
+        r = requests.post(url, json=payload, timeout=10)
+        if r.status_code == 200:
+            log.info("Telemetry posted")
+            return True
+        log.warning("post_telemetry: HTTP %s", r.status_code)
+        return False
+    except Exception as exc:
+        log.warning("post_telemetry error: %s", exc)
+        return False
+
+
 def post_timing_event(cfg: dict, payload: dict) -> bool:
     """POST timing event to server. Returns True on 200 OK."""
     event_id = cfg.get("event_id")
@@ -580,9 +737,10 @@ def main():
     leds.set_armed()
 
     # -----------------------------------------------------------------------
-    # 6. Main loop: keepalive + buffer flush
+    # 6. Main loop: keepalive + buffer flush + telemetry
     # -----------------------------------------------------------------------
     last_keepalive = 0.0
+    last_telemetry = 0.0
     while True:
         now = time.monotonic()
 
@@ -608,6 +766,11 @@ def main():
                 run_preview_mode(cfg, leds, camera)
                 log.info("Re-armed: role=%s", cfg.get("role"))
                 leds.set_armed()
+
+        # Telemetry every 60 seconds
+        if now - last_telemetry >= 60.0:
+            post_telemetry(cfg)
+            last_telemetry = time.monotonic()
 
         time.sleep(1)
 
