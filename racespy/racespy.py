@@ -82,7 +82,8 @@ class State(Enum):
 
 DEFAULT_CONFIG = {
     "camera_id": str(uuid.uuid4()),
-    "server_url": "http://racewrangler.local",
+    "server_url": "https://racewrangler.local",
+    "tls_verify": False,
     "wifi_ssid": "RaceWrangler-Timing",
     "ntp_server": "racewrangler.local",
     "trigger_gpio": 17,
@@ -335,9 +336,15 @@ class RaceSpyCamera:
 # ---------------------------------------------------------------------------
 # Server communication
 
+def request_kwargs(cfg: dict, timeout: float) -> dict:
+    return {
+        "timeout": timeout,
+        "verify": cfg.get("tls_verify", False),
+    }
+
 def server_is_reachable(cfg: dict) -> bool:
     try:
-        r = requests.get(cfg["server_url"], timeout=5)
+        r = requests.get(cfg["server_url"], **request_kwargs(cfg, 5))
         return r.status_code < 500
     except Exception:
         return False
@@ -353,7 +360,7 @@ def register_camera(cfg: dict) -> bool:
         "firmware_version": "1.0.0",
     }
     try:
-        r = requests.post(url, json=payload, timeout=10)
+        r = requests.post(url, json=payload, **request_kwargs(cfg, 10))
         if r.status_code == 200:
             body = r.json().get("data", {})
             role = body.get("role")
@@ -374,7 +381,7 @@ def get_camera_status(cfg: dict) -> str | None:
     """GET /api/cameras/{camera_id}/keepalive. Returns status string or None."""
     url = cfg["server_url"] + f"/api/cameras/{cfg['camera_id']}/keepalive"
     try:
-        r = requests.get(url, timeout=5)
+        r = requests.get(url, **request_kwargs(cfg, 5))
         if r.status_code == 200:
             return r.json().get("data", {}).get("status")
     except Exception:
@@ -390,13 +397,177 @@ def post_timing_event(cfg: dict, payload: dict) -> bool:
         return False
     url = cfg["server_url"] + f"/api/v1/events/{event_id}/timing-events"
     try:
-        r = requests.post(url, json=payload, timeout=15)
+        r = requests.post(url, json=payload, **request_kwargs(cfg, 15))
         if r.status_code == 200:
             return True
         log.warning("post_timing_event: HTTP %s", r.status_code)
         return False
     except Exception as exc:
         log.warning("post_timing_event error: %s", exc)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Telemetry collection
+# ---------------------------------------------------------------------------
+
+def get_gps_status() -> dict:
+    """Query chronyc for GPS/PPS/NTP source status."""
+    try:
+        result = subprocess.run(
+            ["chronyc", "sources", "-v"],
+            capture_output=True, text=True, timeout=5,
+        )
+        lines = result.stdout.splitlines()
+        status = {
+            "pps_lock": False,
+            "pps_offset_us": None,
+            "gps_lock": False,
+            "ntp_lock": False,
+            "stratum": None,
+        }
+        for line in lines:
+            # Example: "#* PPS       9   2   377     3  +1322ns[+1755ns] +/- 1279ns"
+            if "PPS" in line and "#*" in line:
+                status["pps_lock"] = True
+                # Try to extract offset nanoseconds (crude parsing)
+                if "ns[" in line:
+                    try:
+                        offset_str = line.split("+")[1].split("ns")[0]
+                        status["pps_offset_us"] = float(offset_str) / 1000.0
+                    except (IndexError, ValueError):
+                        pass
+            elif "GPS" in line and ("#++" in line or "#+" in line):
+                status["gps_lock"] = True
+            elif "192.168" in line and ("^*" in line or "^+" in line):
+                status["ntp_lock"] = True
+        
+        # Get stratum
+        result = subprocess.run(
+            ["chronyc", "tracking"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            if "Stratum" in line:
+                try:
+                    status["stratum"] = int(line.split(":")[-1].strip())
+                except (IndexError, ValueError):
+                    pass
+        return status
+    except Exception as exc:
+        log.debug("get_gps_status error: %s", exc)
+        return {}
+
+
+def get_system_health() -> dict:
+    """Collect CPU, memory, temperature, WiFi signal."""
+    health = {
+        "temperature_c": None,
+        "wifi_signal_dbm": None,
+        "memory_usage_percent": None,
+        "disk_usage_percent": None,
+        "uptime_seconds": None,
+    }
+    
+    # Temperature
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            millidegrees = int(f.read().strip())
+            health["temperature_c"] = millidegrees / 1000.0
+    except Exception:
+        pass
+    
+    # WiFi signal
+    try:
+        result = subprocess.run(
+            ["cat", "/proc/net/wireless"],
+            capture_output=True, text=True, timeout=5,
+        )
+        # Format: "wlan0: 0000 ... signal level=-XX dBm"
+        lines = result.stdout.splitlines()
+        for line in lines:
+            if "signal level=" in line:
+                try:
+                    level = int(line.split("signal level=")[-1].split()[0])
+                    health["wifi_signal_dbm"] = level
+                except (IndexError, ValueError):
+                    pass
+    except Exception:
+        pass
+    
+    # Memory
+    try:
+        result = subprocess.run(
+            ["free"],
+            capture_output=True, text=True, timeout=5,
+        )
+        lines = result.stdout.splitlines()
+        if len(lines) >= 2:
+            parts = lines[1].split()
+            if len(parts) >= 3:
+                total = int(parts[1])
+                used = int(parts[2])
+                health["memory_usage_percent"] = round(100 * used / total, 1)
+    except Exception:
+        pass
+    
+    # Disk usage
+    try:
+        result = subprocess.run(
+            ["df", "/"],
+            capture_output=True, text=True, timeout=5,
+        )
+        lines = result.stdout.splitlines()
+        if len(lines) >= 2:
+            parts = lines[1].split()
+            if len(parts) >= 5:
+                percent = int(parts[4].rstrip("%"))
+                health["disk_usage_percent"] = percent
+    except Exception:
+        pass
+    
+    # Uptime
+    try:
+        with open("/proc/uptime") as f:
+            uptime_sec = float(f.read().split()[0])
+            health["uptime_seconds"] = int(uptime_sec)
+    except Exception:
+        pass
+    
+    return health
+
+
+def post_telemetry(cfg: dict) -> bool:
+    """POST diagnostic telemetry to server. Returns True on 200 OK."""
+    camera_id = cfg.get("camera_id")
+    event_id = cfg.get("event_id")
+    if not event_id or not camera_id:
+        return False
+    
+    url = cfg["server_url"] + f"/api/cameras/{camera_id}/telemetry"
+    
+    gps_status = get_gps_status()
+    system_health = get_system_health()
+    buffered_count = sum(1 for _ in BUFFER_DIR.glob("*.json")) if BUFFER_DIR.exists() else 0
+    
+    payload = {
+        "camera_id": camera_id,
+        "event_id": event_id,
+        "timestamp_utc_ms": int(time.time() * 1000),
+        "gps": gps_status,
+        "health": system_health,
+        "buffered_payloads": buffered_count,
+    }
+    
+    try:
+        r = requests.post(url, json=payload, **request_kwargs(cfg, 10))
+        if r.status_code in (200, 201, 202):
+            log.debug("Telemetry posted OK")
+            return True
+        log.debug("post_telemetry: HTTP %s", r.status_code)
+        return False
+    except Exception as exc:
+        log.debug("post_telemetry error: %s", exc)
         return False
 
 
@@ -447,7 +618,11 @@ def push_frame(cfg: dict, jpeg: bytes) -> dict | None:
     """POST a JPEG frame to the server. Returns the response body or None on failure."""
     url = cfg["server_url"] + f"/api/cameras/{cfg['camera_id']}/frame"
     try:
-        r = requests.post(url, files={"image": ("frame.jpg", jpeg, "image/jpeg")}, timeout=10)
+        r = requests.post(
+            url,
+            files={"image": ("frame.jpg", jpeg, "image/jpeg")},
+            **request_kwargs(cfg, 10),
+        )
         if r.status_code == 200:
             return r.json()
     except Exception as exc:
@@ -629,9 +804,10 @@ def main():
     leds.set_armed()
 
     # -----------------------------------------------------------------------
-    # 6. Main loop: keepalive + buffer flush
+    # 6. Main loop: keepalive + buffer flush + telemetry
     # -----------------------------------------------------------------------
     last_keepalive = 0.0
+    last_telemetry = 0.0
     while True:
         now = time.monotonic()
 
@@ -654,6 +830,11 @@ def main():
                 run_setup_mode(cfg, leds, camera)
                 log.info("Re-armed: role=%s", cfg.get("role"))
                 leds.set_armed()
+
+        # Telemetry every 60 seconds
+        if now - last_telemetry >= 60.0:
+            post_telemetry(cfg)
+            last_telemetry = time.monotonic()
 
         time.sleep(1)
 

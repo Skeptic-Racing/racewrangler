@@ -214,7 +214,8 @@ mkdir -p "${INSTALL_DIR}"
 cat > "${INSTALL_DIR}/config.json" << EOF
 {
   "camera_id": "${CAMERA_ID}",
-  "server_url": "http://${SERVER_HOSTNAME}",
+    "server_url": "https://${SERVER_HOSTNAME}",
+    "tls_verify": false,
   "wifi_ssid": "${WIFI_SSID}",
   "ntp_server": "${SERVER_HOSTNAME}",
   "trigger_gpio": 17,
@@ -225,7 +226,7 @@ cat > "${INSTALL_DIR}/config.json" << EOF
   "debounce_seconds": 2.0,
   "exposure_time_us": 400,
   "jpeg_quality": 85,
-  "flip": true,
+    "flip": false,
   "role": null,
   "event_id": null
 }
