@@ -49,9 +49,13 @@ ocr_poc/.cache/
 ocr_poc/output/
 ocr_poc/reports/
 
+# TLS private keys - never commit
+certs/**/*-key.pem
+
 # OS
 .DS_Store
 Thumbs.db
 docs/ocr/test_images/
 dist/
 */dev_data/
+frontend/tsconfig.tsbuildinfo

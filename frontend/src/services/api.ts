@@ -65,6 +65,7 @@ export interface Event {
   date: string | null;
   status: 'setup' | 'active' | 'complete';
   timing_mode: 'human' | 'racespy';
+  active_run_group_id: string | null;
   created_at: string;
 }
 
@@ -95,12 +96,37 @@ export interface ClassSummary {
 }
 
 export interface Camera {
-  id: string;
+  camera_id: string;
   event_id: string | null;
   role: string | null;
   status: string;
   firmware_version: string | null;
   last_seen_at: string | null;
+  has_preview: boolean;
+}
+
+export interface CameraTelemetrySnapshot {
+  camera_id: string;
+  event_id: string | null;
+  last_telemetry_at_ms: number | null;
+  telemetry_age_seconds: number | null;
+  stale: boolean;
+  alerts: string[];
+  gps: {
+    pps_lock: boolean | null;
+    pps_offset_us: number | null;
+    gps_lock: boolean | null;
+    ntp_lock: boolean | null;
+    stratum: number | null;
+  };
+  health: {
+    temperature_c: number | null;
+    wifi_signal_dbm: number | null;
+    memory_usage_percent: number | null;
+    disk_usage_percent: number | null;
+    uptime_seconds: number | null;
+  };
+  buffered_payloads: number | null;
 }
 
 export interface TimingEventItem {
@@ -228,6 +254,27 @@ export async function updateEvent(event_id: string, patch: Partial<Pick<Event, '
   return apiFetch<Event>(`${V1_BASE}/events/${event_id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
 }
 
+export async function getActiveEvent(): Promise<Event | null> {
+  const d = await apiFetch<{ event: Event | null }>('/api/active-event');
+  return d.event;
+}
+
+export async function startEvent(event_id: string): Promise<Event> {
+  return apiFetch<Event>(`${V1_BASE}/events/${event_id}/start`, { method: 'POST' });
+}
+
+export async function endEvent(event_id: string): Promise<Event> {
+  return apiFetch<Event>(`${V1_BASE}/events/${event_id}/end`, { method: 'POST' });
+}
+
+export async function startRunGroup(event_id: string, group_id: string): Promise<Event> {
+  return apiFetch<Event>(`${V1_BASE}/events/${event_id}/run-groups/${group_id}/start`, { method: 'POST' });
+}
+
+export async function stopRunGroup(event_id: string): Promise<Event> {
+  return apiFetch<Event>(`${V1_BASE}/events/${event_id}/run-groups/stop`, { method: 'POST' });
+}
+
 // ---------------------------------------------------------------------------
 // Phase 1 — Run Groups
 // ---------------------------------------------------------------------------
@@ -283,6 +330,28 @@ export async function updateCompetitor(event_id: string, competitor_id: string, 
 export async function listCameras(): Promise<Camera[]> {
   const d = await apiFetch<{ cameras: Camera[] }>(`/api/cameras`);
   return d.cameras;
+}
+
+export async function assignCamera(camera_id: string, role: 'start' | 'finish', event_id: string): Promise<Camera> {
+  return apiFetch<Camera>(`/api/cameras/${camera_id}/assign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role, event_id }),
+  });
+}
+
+export async function resetCamera(camera_id: string): Promise<Camera> {
+  return apiFetch<Camera>(`/api/cameras/${camera_id}/reset`, { method: 'POST' });
+}
+
+export async function listCameraTelemetry(event_id?: string): Promise<CameraTelemetrySnapshot[]> {
+  const qs = event_id ? `?event_id=${encodeURIComponent(event_id)}` : '';
+  const d = await apiFetch<{ telemetry: CameraTelemetrySnapshot[] }>(`/api/cameras/telemetry/latest${qs}`);
+  return d.telemetry;
+}
+
+export function cameraPreviewUrl(camera_id: string): string {
+  return `/api/cameras/${camera_id}/preview`;
 }
 
 // ---------------------------------------------------------------------------

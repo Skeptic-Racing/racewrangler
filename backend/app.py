@@ -1,7 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+import asyncio
 import os
 from database import init_db, engine
 from models import Base
@@ -10,6 +11,7 @@ from routes.cameras import router as cameras_router
 from routes.events import router as events_router
 from routes.timing_events import router as timing_events_router
 from routes.staged_runs import router as staged_runs_router
+from ws import manager as ws_manager
 from seed_data import seed_database
 
 # Create FastAPI app
@@ -64,6 +66,38 @@ app.include_router(
 photos_dir = os.path.join(os.path.dirname(__file__), "..", "storage", "photos")
 os.makedirs(photos_dir, exist_ok=True)
 app.mount("/photos", StaticFiles(directory=photos_dir), name="photos")
+
+
+@app.get("/api/active-event")
+def get_active_event(db=None):
+    """Return the currently active event for all clients."""
+    from database import SessionLocal
+    from models import SystemState, Event
+    db = SessionLocal()
+    try:
+        state = db.query(SystemState).filter(SystemState.id == 1).first()
+        if not state or not state.active_event_id:
+            return {"success": True, "data": {"event": None}}
+        event = db.query(Event).filter(Event.id == state.active_event_id).first()
+        if not event:
+            return {"success": True, "data": {"event": None}}
+        from routes.events import _event_dict
+        return {"success": True, "data": {"event": _event_dict(event)}}
+    finally:
+        db.close()
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive; client sends pings, we echo them
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text('{"type":"pong"}')
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
 
 
 @app.get("/health")

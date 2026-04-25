@@ -11,6 +11,7 @@
 # USAGE:
 #   Pi 5 server:
 #     bash scripts/setup-sd-card.sh --type pi5 --mount /mnt/j
+#     bash scripts/setup-sd-card.sh --type pi5 --mount /mnt/j --cert /path/to/cert.pem --key /path/to/key.pem
 #
 #   Pi Zero RaceSpy:
 #     bash scripts/setup-sd-card.sh --type pi-zero --mount /mnt/k
@@ -39,11 +40,15 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 TYPE=""
 MOUNT=""
+CERT_SRC=""
+KEY_SRC=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --type)   TYPE="$2";  shift 2 ;;
         --mount)  MOUNT="$2"; shift 2 ;;
+        --cert)   CERT_SRC="$2"; shift 2 ;;
+        --key)    KEY_SRC="$2"; shift 2 ;;
         -h|--help)
             sed -n '3,30p' "$0"
             exit 0
@@ -56,6 +61,13 @@ done
 [[ -n "$MOUNT" ]] || { echo "ERROR: --mount <path> required";     exit 1; }
 [[ "$TYPE" == "pi5" || "$TYPE" == "pi-zero" ]] \
     || { echo "ERROR: --type must be pi5 or pi-zero"; exit 1; }
+
+if [[ -n "$CERT_SRC" || -n "$KEY_SRC" ]]; then
+    [[ -n "$CERT_SRC" && -n "$KEY_SRC" ]] \
+        || { echo "ERROR: --cert and --key must be provided together"; exit 1; }
+    [[ -f "$CERT_SRC" ]] || { echo "ERROR: cert file not found: $CERT_SRC"; exit 1; }
+    [[ -f "$KEY_SRC" ]]  || { echo "ERROR: key file not found: $KEY_SRC"; exit 1; }
+fi
 
 # ---------------------------------------------------------------------------
 # Normalize Windows paths (J: or J:\) to WSL2 /mnt/j
@@ -157,6 +169,26 @@ if [[ "$TYPE" == "pi5" ]]; then
     cp "${REPO_ROOT}/scripts/pi5-first-boot.sh" "${MOUNT}/pi5-first-boot.sh"
     echo "  Copied pi5-first-boot.sh"
 
+    # Optional HTTPS cert/key copy for first-boot HTTPS provisioning.
+    # Priority:
+    #   1) explicit --cert/--key args
+    #   2) repo defaults under certs/pi5/
+    CERT_DEFAULT="${REPO_ROOT}/certs/pi5/racewrangler-cert.pem"
+    KEY_DEFAULT="${REPO_ROOT}/certs/pi5/racewrangler-key.pem"
+    if [[ -z "$CERT_SRC" && -z "$KEY_SRC" && -f "$CERT_DEFAULT" && -f "$KEY_DEFAULT" ]]; then
+        CERT_SRC="$CERT_DEFAULT"
+        KEY_SRC="$KEY_DEFAULT"
+    fi
+
+    if [[ -n "$CERT_SRC" && -n "$KEY_SRC" ]]; then
+        cp "$CERT_SRC" "${MOUNT}/racewrangler-cert.pem"
+        cp "$KEY_SRC" "${MOUNT}/racewrangler-key.pem"
+        echo "  Copied HTTPS cert/key for first boot"
+    else
+        echo "  WARNING: No HTTPS cert/key provided. Pi5 will provision HTTP-only by default."
+        echo "           Provide --cert and --key (or certs/pi5/racewrangler-*.pem) to enable HTTPS+redirect."
+    fi
+
     echo ""
     echo "--- Updating user-data..."
     inject_runcmd "$MOUNT" "pi5-first-boot.sh"
@@ -165,7 +197,8 @@ if [[ "$TYPE" == "pi5" ]]; then
     echo "=== Pi 5 SD card ready ==="
     echo ""
     echo "  Boot partition contents:"
-    ls -lh "${MOUNT}/racewrangler-server.tar.gz" "${MOUNT}/pi5-first-boot.sh"
+    ls -lh "${MOUNT}/racewrangler-server.tar.gz" "${MOUNT}/pi5-first-boot.sh" 2>/dev/null || true
+    ls -lh "${MOUNT}/racewrangler-cert.pem" "${MOUNT}/racewrangler-key.pem" 2>/dev/null || true
     echo ""
     echo "  Setup log will appear at: ${MOUNT}/setup.log"
     echo "  When it says SETUP COMPLETE, SSH in and verify:"

@@ -4,7 +4,7 @@ import { FinishWorkerUI } from './components/FinishWorkerUI';
 import { TimingAndScoringUI } from './components/TimingAndScoringUI';
 import { AdminUI } from './components/AdminUI';
 import { StagingUI } from './components/StagingUI';
-import { getFinishTriggerStatus, Run, triggerFinish, type Event } from './services/api';
+import { getFinishTriggerStatus, getActiveEvent, Run, triggerFinish, type Event } from './services/api';
 import './styles/main.css';
 
 type TabType = 'starter' | 'finish' | 'staging' | 'timing' | 'admin';
@@ -23,20 +23,67 @@ function App() {
   const [activeEvent, setActiveEvent] = useState<Event | null>(null);
   const toastIdRef = useRef(0);
 
+  // Load active event on startup
   useEffect(() => {
+    getActiveEvent().then(ev => { if (ev) setActiveEvent(ev); }).catch(() => {});
+  }, []);
+
+  // WebSocket for real-time updates
+  useEffect(() => {
+    const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+    let ws: WebSocket | null = null;
+    let pingInterval: ReturnType<typeof setInterval>;
+    let reconnectTimeout: ReturnType<typeof setTimeout>;
     let mounted = true;
-    const sync = async () => {
-      try {
-        const status = await getFinishTriggerStatus();
-        if (mounted) {
-          setFinishTriggered(status.is_finish_triggered);
-          setFinishTriggeredAt(status.is_finish_triggered ? status.finish_triggered_at : null);
-        }
-      } catch {}
+
+    function connect() {
+      if (!mounted) return;
+      ws = new WebSocket(wsUrl);
+
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'finish_trigger') {
+            setFinishTriggered(msg.data.is_finish_triggered);
+            setFinishTriggeredAt(msg.data.is_finish_triggered ? msg.data.finish_triggered_at : null);
+          } else if (msg.type === 'active_event_changed') {
+            setActiveEvent(msg.data.event ?? null);
+          } else if (msg.type === 'run_group_changed') {
+            // Update active_run_group_id on the current event without a round-trip
+            setActiveEvent(prev => {
+              if (!prev || prev.id !== msg.data.event_id) return prev;
+              return { ...prev, active_run_group_id: msg.data.active_run_group_id };
+            });
+          }
+        } catch {}
+      };
+
+      ws.onopen = () => {
+        pingInterval = setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send('ping'), 30000);
+        // Re-sync state in case we missed events while disconnected
+        getFinishTriggerStatus().then(s => {
+          if (!mounted) return;
+          setFinishTriggered(s.is_finish_triggered);
+          setFinishTriggeredAt(s.is_finish_triggered ? s.finish_triggered_at : null);
+        }).catch(() => {});
+        getActiveEvent().then(ev => { if (mounted) setActiveEvent(ev); }).catch(() => {});
+      };
+
+      ws.onclose = () => {
+        clearInterval(pingInterval);
+        if (mounted) reconnectTimeout = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => ws?.close();
+    }
+
+    connect();
+    return () => {
+      mounted = false;
+      clearInterval(pingInterval);
+      clearTimeout(reconnectTimeout);
+      ws?.close();
     };
-    sync();
-    const interval = setInterval(sync, 500);
-    return () => { mounted = false; clearInterval(interval); };
   }, []);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -58,7 +105,6 @@ function App() {
       setFinishTriggeredAt(status.finish_triggered_at);
     } catch (e) { handleError(`Failed to trigger finish: ${e}`); }
   };
-  void handleTriggerFinish; // kept for FinishWorkerUI passthrough — suppress unused warning
 
   const timingMode = activeEvent?.timing_mode ?? 'human';
   const isRaceSpy = timingMode === 'racespy';
@@ -71,13 +117,15 @@ function App() {
     { id: 'timing',  label: '⏱️ Timing & Scoring', show: true },
   ];
 
+  const activeGroupId = activeEvent?.active_run_group_id ?? null;
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f5f5f5' }}>
       <header style={{ backgroundColor: '#111827', color: 'white', padding: '14px 20px', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
         <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h1 style={{ margin: 0, fontSize: 24 }}>🏁 Race Wrangler</h1>
-            {activeEvent && (
+            {activeEvent ? (
               <p style={{ margin: '2px 0 0', fontSize: 13, color: '#9ca3af' }}>
                 {activeEvent.name}
                 <span style={{ marginLeft: 8, padding: '1px 6px', borderRadius: 10,
@@ -87,12 +135,16 @@ function App() {
                 <span style={{ marginLeft: 4, padding: '1px 6px', borderRadius: 10, background: '#1e3a8a', fontSize: 11 }}>
                   {timingMode}
                 </span>
+                {activeGroupId && (
+                  <span style={{ marginLeft: 4, padding: '1px 6px', borderRadius: 10, background: '#7c3aed', fontSize: 11 }}>
+                    group active
+                  </span>
+                )}
               </p>
+            ) : (
+              <p style={{ margin: '2px 0 0', color: '#d97706', fontSize: 13 }}>⚠ No active event — start one in Admin</p>
             )}
           </div>
-          {!activeEvent && (
-            <p style={{ margin: 0, color: '#d97706', fontSize: 13 }}>⚠ No event selected — go to Admin</p>
-          )}
         </div>
       </header>
 
@@ -127,6 +179,7 @@ function App() {
             finishTriggeredAt={finishTriggeredAt}
             onRunFinished={handleRunFinished}
             onError={handleError}
+            onTriggerFinish={handleTriggerFinish}
           />
         )}
         {activeTab === 'timing' && (

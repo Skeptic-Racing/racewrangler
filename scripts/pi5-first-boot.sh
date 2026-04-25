@@ -45,6 +45,9 @@ REPO_URL="https://github.com/Skeptic-Racing/racewrangler.git"
 REPO_BRANCH="main"
 INSTALL_DIR="/opt/racewrangler"
 SERVICE_USER="racewrangler"
+CERTS_DIR="${INSTALL_DIR}/certs"
+BOOT_CERT_PATH="/boot/firmware/racewrangler-cert.pem"
+BOOT_KEY_PATH="/boot/firmware/racewrangler-key.pem"
 
 # =============================================================================
 # Logging — output goes to console AND to /boot/firmware/setup.log
@@ -70,6 +73,13 @@ fi
 log "============================================="
 log "RaceWrangler Pi 5 First-Boot Setup"
 log "============================================="
+
+# Ensure service account exists even when the image was flashed without
+# Raspberry Pi Imager advanced-user customization.
+if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    log "Creating service user: ${SERVICE_USER}"
+    useradd --create-home --shell /bin/bash "$SERVICE_USER"
+fi
 
 # =============================================================================
 # 1. System packages
@@ -297,11 +307,72 @@ chown "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}/.env"
 log "Storage and .env configured."
 
 # =============================================================================
-# 11. Systemd service for RaceWrangler backend
+# 11. HTTPS certificate install (optional)
+# =============================================================================
+
+log "Preparing HTTPS certificate..."
+mkdir -p "${CERTS_DIR}"
+chown -R "${SERVICE_USER}:${SERVICE_USER}" "${CERTS_DIR}"
+
+HTTPS_ENABLED=0
+if [ -f "$BOOT_CERT_PATH" ] && [ -f "$BOOT_KEY_PATH" ]; then
+    cp "$BOOT_CERT_PATH" "${CERTS_DIR}/racewrangler-cert.pem"
+    cp "$BOOT_KEY_PATH" "${CERTS_DIR}/racewrangler-key.pem"
+    chown "${SERVICE_USER}:${SERVICE_USER}" "${CERTS_DIR}/racewrangler-cert.pem" "${CERTS_DIR}/racewrangler-key.pem"
+    chmod 644 "${CERTS_DIR}/racewrangler-cert.pem"
+    chmod 600 "${CERTS_DIR}/racewrangler-key.pem"
+    HTTPS_ENABLED=1
+    log "HTTPS cert/key installed from boot partition."
+else
+    log "WARNING: HTTPS cert/key not found on boot partition. Falling back to HTTP-only setup."
+fi
+
+# =============================================================================
+# 12. Systemd services for RaceWrangler backend
 # =============================================================================
 
 log "Creating racewrangler systemd service..."
+if [ "$HTTPS_ENABLED" -eq 1 ]; then
 cat > /etc/systemd/system/racewrangler.service << EOF
+[Unit]
+Description=RaceWrangler Backend
+After=network-online.target dnsmasq.service chrony.service
+Wants=network-online.target
+
+[Service]
+User=${SERVICE_USER}
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+WorkingDirectory=${INSTALL_DIR}/backend
+ExecStart=${INSTALL_DIR}/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 443 --ssl-certfile ${CERTS_DIR}/racewrangler-cert.pem --ssl-keyfile ${CERTS_DIR}/racewrangler-key.pem
+Restart=always
+RestartSec=5
+EnvironmentFile=${INSTALL_DIR}/.env
+Environment=PYTHONPATH=${INSTALL_DIR}/backend
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat > /etc/systemd/system/racewrangler-http.service << EOF
+[Unit]
+Description=RaceWrangler HTTP to HTTPS Redirect
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=${SERVICE_USER}
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+WorkingDirectory=${INSTALL_DIR}/backend
+ExecStart=${INSTALL_DIR}/.venv/bin/uvicorn http_redirect:app --host 0.0.0.0 --port 80
+Restart=always
+RestartSec=5
+Environment=PYTHONPATH=${INSTALL_DIR}/backend
+
+[Install]
+WantedBy=multi-user.target
+EOF
+else
+    cat > /etc/systemd/system/racewrangler.service << EOF
 [Unit]
 Description=RaceWrangler Backend
 After=network-online.target dnsmasq.service chrony.service
@@ -320,13 +391,17 @@ Environment=PYTHONPATH=${INSTALL_DIR}/backend
 [Install]
 WantedBy=multi-user.target
 EOF
+fi
 
 systemctl daemon-reload
 systemctl enable racewrangler
+if [ "$HTTPS_ENABLED" -eq 1 ]; then
+    systemctl enable racewrangler-http
+fi
 log "racewrangler service enabled."
 
 # =============================================================================
-# 12. Mark setup complete
+# 13. Mark setup complete
 # =============================================================================
 
 echo "$(date)" > "$MARKER_FILE"
@@ -337,9 +412,20 @@ log "============================================="
 log "WiFi SSID : ${WIFI_SSID}"
 log "Password  : ${WIFI_PASSPHRASE}"
 log "Server IP : ${AP_IP}"
-log "Hostname  : http://racewrangler/"
+if [ "$HTTPS_ENABLED" -eq 1 ]; then
+    log "Hostname  : https://racewrangler.local/"
+else
+    log "Hostname  : http://racewrangler/"
+fi
 log ""
 log "The Pi will reboot now. After reboot:"
-log "  - Connect to '${WIFI_SSID}' and browse to http://racewrangler/"
+if [ "$HTTPS_ENABLED" -eq 1 ]; then
+    log "  - Connect to '${WIFI_SSID}' and browse to https://racewrangler.local/"
+else
+    log "  - Connect to '${WIFI_SSID}' and browse to http://racewrangler/"
+fi
 log "  - Or SSH in and run: systemctl status racewrangler"
+if [ "$HTTPS_ENABLED" -eq 1 ]; then
+    log "  - Check redirect service: systemctl status racewrangler-http"
+fi
 log "============================================="

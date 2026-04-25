@@ -242,10 +242,14 @@ def _process_ocr(timing_event_id: str, event_id: str, image_bytes: bytes) -> Non
         if not te:
             return
 
-        # Build run group candidate list — restrict to active run group if possible.
-        competitors = (
-            db.query(Competitor).filter(Competitor.event_id == event_id).all()
-        )
+        # Restrict OCR candidates to the active run group if one is set
+        event_obj = db.query(Event).filter(Event.id == event_id).first()
+        comp_query = db.query(Competitor).filter(Competitor.event_id == event_id)
+        if event_obj and event_obj.active_run_group_id:
+            comp_query = comp_query.filter(
+                Competitor.run_group_id == event_obj.active_run_group_id
+            )
+        competitors = comp_query.all()
         candidates = [
             {"competitor_id": c.id, "number": c.number, "class_code": c.class_code}
             for c in competitors

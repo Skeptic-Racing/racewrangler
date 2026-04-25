@@ -351,23 +351,20 @@ def server_is_reachable(cfg: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 def register_camera(cfg: dict) -> bool:
-    """POST /api/cameras/register. Returns True if registered (200 or already registered)."""
+    """POST /api/cameras/register. Returns True on 200. Role/event assigned later by admin."""
     url = cfg["server_url"] + "/api/cameras/register"
     payload = {
         "camera_id": cfg["camera_id"],
-        "role": cfg.get("role"),
-        "event_id": cfg.get("event_id"),
         "firmware_version": "1.0.0",
     }
     try:
         r = requests.post(url, json=payload, **request_kwargs(cfg, 10))
         if r.status_code == 200:
             body = r.json().get("data", {})
-            role = body.get("role")
-            event_id = body.get("event_id")
-            if role and event_id:
-                cfg["role"] = role
-                cfg["event_id"] = event_id
+            # Server may return existing assignment (e.g. after reboot)
+            if body.get("status") == "assigned" and body.get("role") and body.get("event_id"):
+                cfg["role"] = body["role"]
+                cfg["event_id"] = body["event_id"]
                 save_config(cfg)
             return True
         log.warning("register_camera: HTTP %s", r.status_code)
@@ -614,61 +611,48 @@ def buffer_is_empty() -> bool:
 # Live preview setup mode
 # ---------------------------------------------------------------------------
 
-def push_frame(cfg: dict, jpeg: bytes) -> dict | None:
-    """POST a JPEG frame to the server. Returns the response body or None on failure."""
-    url = cfg["server_url"] + f"/api/cameras/{cfg['camera_id']}/frame"
-    try:
-        r = requests.post(
-            url,
-            files={"image": ("frame.jpg", jpeg, "image/jpeg")},
-            **request_kwargs(cfg, 10),
-        )
-        if r.status_code == 200:
-            return r.json()
-    except Exception as exc:
-        log.debug("push_frame error: %s", exc)
+def scan_for_qr(camera: RaceSpyCamera) -> dict | None:
+    """Capture a frame and look for a JSON QR code. Returns decoded dict or None."""
+    if not PYZBAR_AVAILABLE:
+        return None
+    img = camera.capture_pil()
+    if img is None:
+        return None
+    decoded = qr_decode(img)
+    for item in decoded:
+        try:
+            data = json.loads(item.data.decode("utf-8"))
+            if "role" in data and "event_id" in data:
+                return data
+        except Exception:
+            pass
     return None
 
 
-def run_setup_mode(cfg: dict, leds: LEDSet, camera: RaceSpyCamera) -> bool:
+def run_preview_mode(cfg: dict, leds: LEDSet, camera: RaceSpyCamera) -> bool:
     """
-    Push live preview frames to the server until an admin assigns a role via the web UI.
-    Updates cfg in place and persists to disk. Returns True on success.
+    Blink green LED and scan for QR code until a valid role/event pair is received
+    from the server. Updates cfg in place and persists to disk. Returns True on success.
     """
-    log.info("Entering SETUP mode — pushing preview frames, waiting for admin assignment")
-
-    while not server_is_reachable(cfg):
-        log.info("Server not reachable, waiting...")
-        leds.set_wifi_up()
-        time.sleep(5)
-
-    leds.set_server_ready()
-    log.info("Server reachable — streaming preview to admin UI")
+    log.info("Entering SETUP mode — show QR code to camera")
+    leds.set_setup()
 
     while True:
-        jpeg = camera.capture_jpeg()
-        if not jpeg:
-            time.sleep(1)
-            continue
-
-        response = push_frame(cfg, jpeg)
-        if response is None:
-            log.warning("Lost server connection")
-            leds.set_wifi_up()
-            while not server_is_reachable(cfg):
+        qr = scan_for_qr(camera)
+        if qr:
+            log.info("QR decoded: role=%s event_id=%s", qr.get("role"), qr.get("event_id"))
+            cfg["role"] = qr["role"]
+            cfg["event_id"] = qr["event_id"]
+            if register_camera(cfg):
+                log.info("Camera registered: role=%s", cfg["role"])
+                return True
+            else:
+                log.warning("Server rejected registration — red blink, retry in 5s")
+                leds.set_fault()
                 time.sleep(5)
-            leds.set_server_ready()
-            continue
-
-        if response.get("status") == "assigned":
-            cfg["role"] = response["role"]
-            cfg["event_id"] = response["event_id"]
-            save_config(cfg)
-            log.info("Assignment received: role=%s event_id=%s", cfg["role"], cfg["event_id"])
-            leds.set_registered()
-            return True
-
-        time.sleep(1)   # ~1 fps preview
+                leds.set_setup()
+        else:
+            time.sleep(0.5)   # Scan at ~2 fps
 
 
 # ---------------------------------------------------------------------------
@@ -761,24 +745,23 @@ def main():
             time.sleep(30)
 
     # -----------------------------------------------------------------------
-    # 4. Setup mode — register if not already configured
+    # 4. Register with server, then enter preview mode if not yet assigned
     # -----------------------------------------------------------------------
     state = State.SETUP
 
-    # Check if already registered from a previous boot
+    # Register on every boot so the server knows we're online.
+    # register_camera() returns existing assignment if server already has one.
+    while not register_camera(cfg):
+        log.warning("Cannot reach server — retrying in 5s")
+        leds.set_fault()
+        time.sleep(5)
+
+    # If server returned an existing assignment, skip preview mode.
     if cfg.get("role") and cfg.get("event_id"):
-        log.info("Config has role=%s event_id=%s — attempting keepalive to confirm", cfg["role"], cfg["event_id"])
-        status = get_camera_status(cfg)
-        if status == "active":
-            log.info("Server confirms active registration — skipping QR scan")
-        elif status == "pending":
-            log.info("Server says pending — running QR setup")
-            run_setup_mode(cfg, leds, camera)
-        else:
-            log.info("Server unreachable or unknown status — re-registering")
-            register_camera(cfg)
+        log.info("Restored assignment from server: role=%s", cfg["role"])
     else:
-        run_setup_mode(cfg, leds, camera)
+        # Wait for admin to assign a role via the Admin UI
+        run_preview_mode(cfg, leds, camera)
 
     # -----------------------------------------------------------------------
     # 5. Armed mode
@@ -828,10 +811,13 @@ def main():
             last_keepalive = time.monotonic()
 
             if status == "pending":
-                # Admin reset camera to setup mode from web UI
-                log.info("Server set camera to pending — returning to SETUP mode")
+                # Admin reset camera — re-enter preview mode
+                log.info("Server set camera to pending — returning to preview mode")
+                cfg["role"] = None
+                cfg["event_id"] = None
+                save_config(cfg)
                 leds.set_setup()
-                run_setup_mode(cfg, leds, camera)
+                run_preview_mode(cfg, leds, camera)
                 log.info("Re-armed: role=%s", cfg.get("role"))
                 leds.set_armed()
 
