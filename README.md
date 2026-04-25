@@ -22,6 +22,19 @@ docker-compose up
 # - API Docs: http://localhost:8000/docs
 ```
 
+### Pi 5 Prebuilt Image (Optional)
+
+For testers who want a flash-and-boot experience, use the GitHub Actions workflow:
+
+- Workflow file: `.github/workflows/pi5-image.yml`
+- Output: `racewrangler-pi5-*.img.xz` + `SHA256SUMS.txt`
+- Flash in Raspberry Pi Imager using **Use custom**
+
+Manual setup remains fully supported and documented in:
+
+- `docs/hardware/pi5-server-setup.md`
+- `scripts/setup-sd-card.sh`
+
 ## Local Development Setup
 
 ### Prerequisites

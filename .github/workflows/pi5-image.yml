@@ -1,0 +1,109 @@
+name: Build Pi5 Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      wifi_ssid:
+        description: "Timing AP SSID baked into the image"
+        required: false
+        default: "RaceWrangler-Timing"
+      wifi_passphrase:
+        description: "Timing AP passphrase baked into the image"
+        required: false
+        default: "timing01"
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-pi5-image:
+    runs-on: ubuntu-24.04
+    # PaddleOCR install under QEMU emulation is slow — allow 4 hours
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Registers ARM64 binfmt_misc so the chroot can run aarch64 binaries
+      - name: Setup QEMU (ARM64 binfmt)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      # GitHub runners have ~14 GB free; the expanded image needs ~8 GB
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/share/boost \
+            /usr/share/swift
+          df -h
+
+      - name: Install image build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-user-static binfmt-support \
+            parted e2fsprogs xz-utils curl
+
+      - name: Download Raspberry Pi OS Lite 64-bit image
+        run: |
+          mkdir -p dist
+          curl -fL https://downloads.raspberrypi.com/raspios_lite_arm64_latest \
+            -o dist/raspios_lite_arm64_latest.img.xz
+          xz -T0 -d dist/raspios_lite_arm64_latest.img.xz
+
+      - name: Build fully-loaded image
+        env:
+          WIFI_SSID: ${{ github.event.inputs.wifi_ssid || 'RaceWrangler-Timing' }}
+          WIFI_PASSPHRASE: ${{ github.event.inputs.wifi_passphrase || 'timing01' }}
+        run: |
+          BASE_IMAGE="$(ls dist/*.img | head -n1)"
+          OUTPUT_IMAGE="dist/racewrangler-pi5-${{ github.run_number }}.img"
+
+          bash scripts/build-pi5-image.sh \
+            --base-image "$BASE_IMAGE" \
+            --output-image "$OUTPUT_IMAGE" \
+            --wifi-ssid "$WIFI_SSID" \
+            --wifi-passphrase "$WIFI_PASSPHRASE"
+
+      - name: Compress image
+        run: |
+          IMAGE="$(ls dist/racewrangler-pi5-*.img | head -n1)"
+          # -6 balances compression ratio vs time for a ~8 GB image
+          xz -T0 -6 "$IMAGE"
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum *.img.xz > SHA256SUMS.txt
+          ls -lh
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: racewrangler-pi5-image
+          path: |
+            dist/*.img.xz
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach image to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.img.xz
+            dist/SHA256SUMS.txt
+

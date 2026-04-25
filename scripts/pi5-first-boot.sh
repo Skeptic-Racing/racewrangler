@@ -74,6 +74,13 @@ log "============================================="
 log "RaceWrangler Pi 5 First-Boot Setup"
 log "============================================="
 
+# Ensure service account exists even when the image was flashed without
+# Raspberry Pi Imager advanced-user customization.
+if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    log "Creating service user: ${SERVICE_USER}"
+    useradd --create-home --shell /bin/bash "$SERVICE_USER"
+fi
+
 # =============================================================================
 # 1. System packages
 # =============================================================================

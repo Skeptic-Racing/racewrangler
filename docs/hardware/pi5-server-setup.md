@@ -21,6 +21,36 @@ OS image, software installation, WiFi access point, DNS, NTP, and service startu
 
 ## 2. OS Installation
 
+You can use either path below:
+
+- **Path A (Manual, existing flow):** Flash stock Raspberry Pi OS Lite and follow this document.
+- **Path B (Prebuilt CI image):** Download the `racewrangler-pi5-*.img.xz` artifact built by GitHub Actions and flash it directly with Raspberry Pi Imager.
+
+### 2.1 Path B — Prebuilt CI Image (Optional)
+
+1. Open the latest GitHub Release (or Actions run artifact) and download:
+  - `racewrangler-pi5-*.img.xz`
+  - `SHA256SUMS.txt`
+2. Verify checksum:
+
+```bash
+sha256sum -c SHA256SUMS.txt
+```
+
+3. In **Raspberry Pi Imager**:
+  - Choose **Use custom**
+  - Select the downloaded `racewrangler-pi5-*.img.xz`
+  - Write to a 32 GB+ microSD
+4. Boot the Pi 5 with internet connected for first boot (apt/pip/PaddleOCR install).
+5. Wait for provisioning to complete (typically 20-40 minutes).
+
+Notes:
+- The prebuilt image still runs `pi5-first-boot.sh` on first boot.
+- AP defaults come from the workflow inputs (default SSID `RaceWrangler-Timing`, passphrase `timing01`).
+- This is intended for trial/evaluation convenience, not hardened production security.
+
+### 2.2 Path A — Manual Stock Image Setup (Current Standard)
+
 1. Download **Raspberry Pi OS Lite (64-bit)** from raspberrypi.com
 2. Flash to microSD with **Raspberry Pi Imager**
 3. In the Imager advanced settings before flashing:
