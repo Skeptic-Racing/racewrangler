@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { getCars, getHoldStatus, getRuns, startRun, Car, Run } from '../services/api';
+import { attachStreamToVideo, openPreferredCamera, stopMediaStream } from '../utils/camera';
 
 interface StarterUIProps {
   onRunStarted: (run: Run) => void;
@@ -15,10 +16,14 @@ export function StarterUI({ onRunStarted, onError }: StarterUIProps) {
   const [loading, setLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [holdMessage, setHoldMessage] = useState<string | null>(null);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const searchRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const uploadRef = useRef<HTMLInputElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   // Filtered list: all cars when no search term, otherwise filtered
   const visibleCars = searchTerm
@@ -85,41 +90,51 @@ export function StarterUI({ onRunStarted, onError }: StarterUIProps) {
     setTimeout(() => inputRef.current?.focus(), 0);
   };
 
+  const startCamera = async (showErrorToast = false) => {
+    if (!videoRef.current) return;
+    setCameraReady(false);
+    setCameraError(null);
+    stopMediaStream(streamRef.current);
+    streamRef.current = null;
+
+    try {
+      const stream = await openPreferredCamera();
+      streamRef.current = stream;
+      await attachStreamToVideo(videoRef.current, stream);
+      setCameraReady(true);
+    } catch {
+      setCameraReady(false);
+      setCameraError('Live preview unavailable. Use camera upload, or tap Retry Camera.');
+      if (showErrorToast) {
+        onError('Live camera preview unavailable. Use camera upload for this device/network.');
+      }
+    }
+  };
+
   // Initialize webcam
   useEffect(() => {
-    if (!videoRef.current) return;
-
-    const startCamera = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } }
-        });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-      } catch (error) {
-        try {
-          const fallbackStream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-          });
-          if (videoRef.current) {
-            videoRef.current.srcObject = fallbackStream;
-          }
-        } catch (fallbackError) {
-          onError(`Failed to access camera: ${fallbackError}`);
-        }
-      }
-    };
-
-    startCamera();
+    startCamera(false);
 
     return () => {
-      if (videoRef.current && videoRef.current.srcObject) {
-        const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-        tracks.forEach(track => track.stop());
-      }
+      stopMediaStream(streamRef.current);
+      streamRef.current = null;
+      setCameraReady(false);
     };
   }, []);
+
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = ev => {
+      setPhoto(file);
+      setPhotoPreview(ev.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+
+    if (uploadRef.current) uploadRef.current.value = '';
+  };
 
   // Select car from dropdown
   const selectCar = (car: Car) => {
@@ -241,17 +256,37 @@ export function StarterUI({ onRunStarted, onError }: StarterUIProps) {
 
         {/* Video feed */}
         <div className="video-container">
-          <video ref={videoRef} autoPlay playsInline />
+          <video ref={videoRef} autoPlay playsInline muted />
         </div>
+
+        {cameraError && (
+          <div style={{ marginBottom: '10px', fontSize: 13, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '8px 10px' }}>
+            {cameraError}
+          </div>
+        )}
+
+        <button
+          className="secondary"
+          onClick={() => startCamera(true)}
+          style={{ width: '100%', marginBottom: '10px' }}
+        >
+          Retry Camera
+        </button>
 
         {/* Capture button */}
         <button
           className="primary"
           onClick={capturePhoto}
+          disabled={!cameraReady}
           style={{ width: '100%', marginBottom: '10px' }}
         >
           📸 Take Photo
         </button>
+
+        <label className="secondary" style={{ display: 'block', textAlign: 'center', cursor: 'pointer', marginBottom: '10px', padding: '10px 12px' }}>
+          📁 Use Camera Upload
+          <input ref={uploadRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handlePhotoUpload} />
+        </label>
 
         {/* Photo preview */}
         {photoPreview && (

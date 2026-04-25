@@ -127,6 +127,13 @@ def update_event(event_id: str, payload: dict, db: Session = Depends(get_db)):
     if "name" in payload:
         event.name = payload["name"]
     db.commit()
+
+    # Keep all connected clients in sync when the active event changes
+    # (including timing_mode flips between human and racespy).
+    state = _get_system_state(db)
+    if state.active_event_id == event.id:
+        _broadcast_event_change(event, state)
+
     return {"success": True, "data": _event_dict(event)}
 
 

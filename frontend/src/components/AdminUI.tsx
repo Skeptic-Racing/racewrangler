@@ -4,8 +4,8 @@ import {
   listRunGroups, createRunGroup, deleteRunGroup, startRunGroup, stopRunGroup,
   getAssignmentSummary, bulkAssign,
   listCompetitors, updateCompetitor, importCompetitorsCSV,
-  listCameras, assignCamera, resetCamera, cameraPreviewUrl, resetData,
-  type Event, type RunGroup, type Competitor, type ClassSummary, type Camera,
+  listCameras, listCameraTelemetry, assignCamera, resetCamera, cameraPreviewUrl, resetData,
+  type Event, type RunGroup, type Competitor, type ClassSummary, type Camera, type CameraTelemetrySnapshot,
 } from '../services/api';
 
 interface AdminUIProps {
@@ -28,6 +28,7 @@ export function AdminUI({ activeEvent, onEventChange, onError, onSuccess }: Admi
   const [classSummary, setClassSummary] = useState<ClassSummary[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [cameras, setCameras] = useState<Camera[]>([]);
+  const [telemetryByCamera, setTelemetryByCamera] = useState<Record<string, CameraTelemetrySnapshot>>({});
 
   // Event creation
   const [newEventName, setNewEventName] = useState('');
@@ -65,7 +66,7 @@ export function AdminUI({ activeEvent, onEventChange, onError, onSuccess }: Admi
     loadCameras();
     const interval = setInterval(loadCameras, 5000);
     return () => clearInterval(interval);
-  }, [tab]);
+  }, [tab, activeEvent?.id]);
 
   async function loadEvents() {
     try { setEvents(await listEvents()); } catch (e) { onError(`${e}`); }
@@ -89,7 +90,16 @@ export function AdminUI({ activeEvent, onEventChange, onError, onSuccess }: Admi
   }
 
   async function loadCameras() {
-    try { setCameras(await listCameras()); } catch {}
+    try {
+      const [cameraList, telemetry] = await Promise.all([
+        listCameras(),
+        listCameraTelemetry(activeEvent?.id),
+      ]);
+      setCameras(cameraList);
+      const mapped: Record<string, CameraTelemetrySnapshot> = {};
+      for (const t of telemetry) mapped[t.camera_id] = t;
+      setTelemetryByCamera(mapped);
+    } catch {}
   }
 
   // ── Event tab ──────────────────────────────────────────────────────────────
@@ -255,6 +265,28 @@ export function AdminUI({ activeEvent, onEventChange, onError, onSuccess }: Admi
     background: dragOver === (id ?? 'unassigned') ? '#eff6ff' : '#f9fafb',
     transition: 'all 0.15s',
   });
+
+  function formatTelemetryAge(ageSeconds: number | null): string {
+    if (ageSeconds == null) return 'no data';
+    if (ageSeconds < 60) return `${Math.round(ageSeconds)}s ago`;
+    const mins = Math.floor(ageSeconds / 60);
+    const secs = Math.round(ageSeconds % 60);
+    return `${mins}m ${secs}s ago`;
+  }
+
+  function formatUptime(seconds: number | null): string {
+    if (seconds == null) return 'n/a';
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    if (hours > 0) return `${hours}h ${mins}m`;
+    return `${mins}m`;
+  }
+
+  const camerasWithTelemetry = cameras.filter(c => telemetryByCamera[c.camera_id]);
+  const warningCameras = camerasWithTelemetry.filter(c => {
+    const t = telemetryByCamera[c.camera_id];
+    return t.stale || t.alerts.length > 0;
+  }).length;
 
   function ClassCard({ cls }: { cls: ClassSummary }) {
     return (
@@ -545,6 +577,19 @@ export function AdminUI({ activeEvent, onEventChange, onError, onSuccess }: Admi
             <p style={{ marginTop: 0, fontSize: 14, color: '#555' }}>
               Cameras appear here when they connect. Select a role and assign before starting the event.
             </p>
+            {camerasWithTelemetry.length > 0 && (
+              <div style={{
+                marginBottom: 12,
+                padding: '8px 10px',
+                borderRadius: 6,
+                fontSize: 13,
+                background: warningCameras > 0 ? '#fff4e5' : '#ecfdf3',
+                color: warningCameras > 0 ? '#92400e' : '#065f46',
+                border: `1px solid ${warningCameras > 0 ? '#fcd9bd' : '#b7ebcc'}`,
+              }}>
+                Telemetry health: {camerasWithTelemetry.length - warningCameras} healthy, {warningCameras} needs attention.
+              </div>
+            )}
             {cameras.length === 0 ? (
               <div style={{ textAlign: 'center', padding: 40, color: '#888', border: '2px dashed #e5e7eb', borderRadius: 8 }}>
                 <div style={{ fontSize: 32, marginBottom: 8 }}>📷</div>
@@ -555,8 +600,10 @@ export function AdminUI({ activeEvent, onEventChange, onError, onSuccess }: Admi
                 {cameras.map(cam => {
                   const cid = cam.camera_id;
                   const isOnline = cam.has_preview;
+                  const telemetry = telemetryByCamera[cid];
                   const selectedRole = camRoles[cid] || cam.role as 'start' | 'finish' | null || 'start';
                   const selectedEvent = camEvents[cid] || activeEvent?.id || '';
+                  const telemetryNeedsAttention = !!telemetry && (telemetry.stale || telemetry.alerts.length > 0);
                   return (
                     <div key={cid} style={{ border: `2px solid ${cam.status === 'assigned' ? '#1a56db' : isOnline ? '#e5e7eb' : '#f3f4f6'}`, borderRadius: 8, overflow: 'hidden', background: 'white' }}>
                       <div style={{ position: 'relative', background: '#111', height: 160 }}>
@@ -574,6 +621,38 @@ export function AdminUI({ activeEvent, onEventChange, onError, onSuccess }: Admi
                       </div>
                       <div style={{ padding: 12 }}>
                         <div style={{ fontSize: 12, color: '#888', marginBottom: 8, fontFamily: 'monospace' }}>{cid.slice(0, 16)}…</div>
+                        <div style={{
+                          marginBottom: 8,
+                          padding: '6px 8px',
+                          borderRadius: 5,
+                          background: telemetryNeedsAttention ? '#fff7ed' : '#f9fafb',
+                          border: `1px solid ${telemetryNeedsAttention ? '#fed7aa' : '#e5e7eb'}`,
+                          fontSize: 12,
+                          color: '#374151',
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span>Telemetry</span>
+                            <span style={{ color: telemetry?.stale ? '#b45309' : '#6b7280' }}>{formatTelemetryAge(telemetry?.telemetry_age_seconds ?? null)}</span>
+                          </div>
+                          {telemetry ? (
+                            <div style={{ marginTop: 4, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+                              <span>PPS: {telemetry.gps.pps_lock ? 'locked' : 'unlocked'}</span>
+                              <span>WiFi: {telemetry.health.wifi_signal_dbm == null ? 'n/a' : `${telemetry.health.wifi_signal_dbm} dBm`}</span>
+                              <span>Temp: {telemetry.health.temperature_c == null ? 'n/a' : `${telemetry.health.temperature_c.toFixed(1)} C`}</span>
+                              <span>Uptime: {formatUptime(telemetry.health.uptime_seconds)}</span>
+                              <span>Mem: {telemetry.health.memory_usage_percent == null ? 'n/a' : `${telemetry.health.memory_usage_percent.toFixed(0)}%`}</span>
+                              <span>Disk: {telemetry.health.disk_usage_percent == null ? 'n/a' : `${telemetry.health.disk_usage_percent.toFixed(0)}%`}</span>
+                              <span>Buffered: {telemetry.buffered_payloads == null ? 'n/a' : telemetry.buffered_payloads}</span>
+                            </div>
+                          ) : (
+                            <div style={{ marginTop: 4 }}>No telemetry received yet.</div>
+                          )}
+                          {telemetry && telemetry.alerts.length > 0 && (
+                            <div style={{ marginTop: 5, color: '#b45309' }}>
+                              Alerts: {telemetry.alerts.join(', ')}
+                            </div>
+                          )}
+                        </div>
                         <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
                           <select value={selectedRole} onChange={e => setCamRoles(r => ({ ...r, [cid]: e.target.value as any }))}
                             style={{ flex: 1, padding: '5px 8px', borderRadius: 4, border: '1px solid #ccc', fontSize: 13 }}>

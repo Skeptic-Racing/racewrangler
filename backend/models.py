@@ -131,6 +131,33 @@ class Camera(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class CameraTelemetry(Base):
+    """Periodic health telemetry emitted by a RaceSpy camera."""
+    __tablename__ = "camera_telemetry"
+
+    id = Column(String(36), primary_key=True)
+    camera_id = Column(String(36), ForeignKey("cameras.id"), nullable=False, index=True)
+    event_id = Column(String(36), ForeignKey("events.id"), nullable=False, index=True)
+    timestamp_utc_ms = Column(BigInteger, nullable=False, index=True)
+
+    # GPS / time sync state
+    pps_lock = Column(Boolean, nullable=True)
+    pps_offset_us = Column(Float, nullable=True)
+    gps_lock = Column(Boolean, nullable=True)
+    ntp_lock = Column(Boolean, nullable=True)
+    stratum = Column(Integer, nullable=True)
+
+    # Device health state
+    temperature_c = Column(Float, nullable=True)
+    wifi_signal_dbm = Column(Integer, nullable=True)
+    memory_usage_percent = Column(Float, nullable=True)
+    disk_usage_percent = Column(Float, nullable=True)
+    uptime_seconds = Column(Integer, nullable=True)
+    buffered_payloads = Column(Integer, default=0, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
 class TimingEvent(Base):
     """A raw timing capture POSTed by a RaceSpy camera."""
     __tablename__ = "timing_events"

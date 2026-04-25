@@ -4,6 +4,7 @@ import {
   listCompetitors,
   type Event, type StagedRun, type Competitor, type OCRScanResult,
 } from '../services/api';
+import { attachStreamToVideo, openPreferredCamera, stopMediaStream } from '../utils/camera';
 
 interface StagingUIProps {
   activeEvent: Event | null;
@@ -37,6 +38,7 @@ export function StagingUI({ activeEvent, onError, onSuccess }: StagingUIProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
+  const [cameraAutoStarted, setCameraAutoStarted] = useState(false);
 
   useEffect(() => {
     if (!activeEvent) return;
@@ -61,20 +63,44 @@ export function StagingUI({ activeEvent, onError, onSuccess }: StagingUIProps) {
     try { setCompetitors(await listCompetitors(activeEvent.id)); } catch (e) { onError(`Failed to load competitors: ${e}`); }
   }
 
-  async function startCamera() {
+  async function startCamera(silent = false) {
+    if (!videoRef.current) return;
+    stopMediaStream(streamRef.current);
+    streamRef.current = null;
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      const stream = await openPreferredCamera();
       streamRef.current = stream;
-      if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
+      await attachStreamToVideo(videoRef.current, stream);
       setCameraActive(true);
-    } catch { onError('Camera not available — use file upload instead'); }
+      setCameraAutoStarted(true);
+    } catch {
+      if (!silent) {
+        onError('Unable to open live camera preview. Use Upload Photo to take/select a picture.');
+      }
+    }
   }
 
   function stopCamera() {
-    streamRef.current?.getTracks().forEach(t => t.stop());
+    stopMediaStream(streamRef.current);
     streamRef.current = null;
     setCameraActive(false);
   }
+
+  useEffect(() => {
+    return () => {
+      stopMediaStream(streamRef.current);
+      streamRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activeEvent) return;
+    if (stage !== 'capture') return;
+    if (cameraActive) return;
+    if (cameraAutoStarted) return;
+    startCamera(true);
+  }, [activeEvent, stage, cameraActive, cameraAutoStarted]);
 
   function captureFromCamera() {
     if (!videoRef.current || !canvasRef.current) return;
@@ -123,20 +149,30 @@ export function StagingUI({ activeEvent, onError, onSuccess }: StagingUIProps) {
     } finally { /* done */ }
   }
 
-  async function handleStage() {
-    if (!activeEvent || !selectedCompetitorId) return;
+  async function stageCompetitor(competitorId: string) {
+    if (!activeEvent) return;
     setStaging(true);
     try {
-      await createStagedRun(activeEvent.id, selectedCompetitorId, capturedImage || undefined);
-      const comp = competitors.find(c => c.id === selectedCompetitorId);
+      const created = await createStagedRun(activeEvent.id, competitorId, capturedImage || undefined);
+      setQueue(prev => [created, ...prev.filter(r => r.id !== created.id)]);
+      const comp = competitors.find(c => c.id === competitorId);
       onSuccess(`Staged: #${comp?.number} ${comp?.class_code} — ${comp?.driver_name}`);
       reset();
       await loadQueue();
-    } catch (e) { onError(`${e}`); }
-    finally { setStaging(false); }
+    } catch (e) {
+      onError(`${e}`);
+    } finally {
+      setStaging(false);
+    }
+  }
+
+  async function handleStage() {
+    if (!selectedCompetitorId) return;
+    await stageCompetitor(selectedCompetitorId);
   }
 
   function reset() {
+    setCameraAutoStarted(false);
     setStage('capture');
     setCapturedImage(null);
     setCapturedDataUrl(null);
@@ -177,24 +213,33 @@ export function StagingUI({ activeEvent, onError, onSuccess }: StagingUIProps) {
 
             {stage === 'capture' && (
               <>
-                {cameraActive ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <video ref={videoRef} style={{ width: '100%', borderRadius: 6, background: '#000' }} playsInline muted />
-                    <canvas ref={canvasRef} style={{ display: 'none' }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <video
+                    ref={videoRef}
+                    style={{ width: '100%', borderRadius: 6, background: '#000', display: cameraActive ? 'block' : 'none' }}
+                    autoPlay
+                    playsInline
+                    muted
+                  />
+                  <canvas ref={canvasRef} style={{ display: 'none' }} />
+                  {cameraActive && (
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button style={{ flex: 1, padding: '10px', background: '#1a56db', color: 'white', border: 'none', borderRadius: 6, fontSize: 16, cursor: 'pointer' }} onClick={captureFromCamera}>
                         📸 Capture
                       </button>
                       <button style={{ padding: '10px 16px', border: '1px solid #ccc', borderRadius: 6, cursor: 'pointer' }} onClick={stopCamera}>Cancel</button>
                     </div>
-                  </div>
-                ) : (
+                  )}
+                </div>
+
+                {!cameraActive && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <button style={{ padding: '14px', background: '#1a56db', color: 'white', border: 'none', borderRadius: 6, fontSize: 16, cursor: 'pointer', width: '100%' }}
-                      onClick={startCamera}>📷 Open Camera</button>
+                    <div style={{ fontSize: 13, color: '#6b7280' }}>Opening camera… If it does not appear, retry below.</div>
+                    <button style={{ padding: '10px', background: '#f3f4f6', color: '#111827', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 14, cursor: 'pointer', width: '100%' }}
+                      onClick={() => startCamera(false)}>🔄 Retry Camera</button>
                     <label style={{ padding: '10px', background: '#f3f4f6', border: '1px solid #ccc', borderRadius: 6, textAlign: 'center', cursor: 'pointer', fontSize: 14 }}>
                       📁 Upload Photo
-                      <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleFileUpload} />
+                      <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handleFileUpload} />
                     </label>
                     <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
                       <p style={{ fontSize: 13, color: '#555', margin: '0 0 8px' }}>Or select manually:</p>
@@ -203,7 +248,7 @@ export function StagingUI({ activeEvent, onError, onSuccess }: StagingUIProps) {
                       {manualSearch && (
                         <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 4, marginTop: 4 }}>
                           {filteredCompetitors.slice(0, 20).map(c => (
-                            <div key={c.id} onClick={() => { setSelectedCompetitorId(c.id); setStage('confirm'); setScanResult(null); }}
+                            <div key={c.id} onClick={() => stageCompetitor(c.id)}
                               style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #f3f4f6', fontSize: 13 }}
                               onMouseEnter={e => (e.currentTarget.style.background = '#eff6ff')}
                               onMouseLeave={e => (e.currentTarget.style.background = 'white')}>
@@ -290,7 +335,15 @@ export function StagingUI({ activeEvent, onError, onSuccess }: StagingUIProps) {
       {/* Right: queue */}
       <div>
         <div className="card">
-          <div className="card-header">Run Queue ({queue.length})</div>
+          <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Run Queue ({queue.length})</span>
+            <button
+              onClick={loadQueue}
+              style={{ padding: '4px 8px', fontSize: 12, borderRadius: 4, border: '1px solid #d1d5db', background: 'white', cursor: 'pointer' }}
+            >
+              Refresh
+            </button>
+          </div>
           <div style={{ padding: 12 }}>
             {queue.length === 0 && <p style={{ color: '#888', textAlign: 'center', padding: 16 }}>Queue is empty</p>}
             {queue.map((run, i) => (

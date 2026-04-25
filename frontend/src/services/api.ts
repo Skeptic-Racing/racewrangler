@@ -105,6 +105,30 @@ export interface Camera {
   has_preview: boolean;
 }
 
+export interface CameraTelemetrySnapshot {
+  camera_id: string;
+  event_id: string | null;
+  last_telemetry_at_ms: number | null;
+  telemetry_age_seconds: number | null;
+  stale: boolean;
+  alerts: string[];
+  gps: {
+    pps_lock: boolean | null;
+    pps_offset_us: number | null;
+    gps_lock: boolean | null;
+    ntp_lock: boolean | null;
+    stratum: number | null;
+  };
+  health: {
+    temperature_c: number | null;
+    wifi_signal_dbm: number | null;
+    memory_usage_percent: number | null;
+    disk_usage_percent: number | null;
+    uptime_seconds: number | null;
+  };
+  buffered_payloads: number | null;
+}
+
 export interface TimingEventItem {
   id: string;
   camera_id: string;
@@ -318,6 +342,12 @@ export async function assignCamera(camera_id: string, role: 'start' | 'finish', 
 
 export async function resetCamera(camera_id: string): Promise<Camera> {
   return apiFetch<Camera>(`/api/cameras/${camera_id}/reset`, { method: 'POST' });
+}
+
+export async function listCameraTelemetry(event_id?: string): Promise<CameraTelemetrySnapshot[]> {
+  const qs = event_id ? `?event_id=${encodeURIComponent(event_id)}` : '';
+  const d = await apiFetch<{ telemetry: CameraTelemetrySnapshot[] }>(`/api/cameras/telemetry/latest${qs}`);
+  return d.telemetry;
 }
 
 export function cameraPreviewUrl(camera_id: string): string {
