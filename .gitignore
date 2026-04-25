@@ -58,3 +58,4 @@ Thumbs.db
 docs/ocr/test_images/
 dist/
 */dev_data/
+frontend/tsconfig.tsbuildinfo
