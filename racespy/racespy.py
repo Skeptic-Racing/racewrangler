@@ -791,12 +791,16 @@ def main():
     handler = TriggerHandler(cfg, camera)
 
     if GPIO_AVAILABLE:
-        trigger_btn = Button(
-            pin=cfg["trigger_gpio"],
-            pull_up=False,
-            bounce_time=0.05,
-        )
-        trigger_btn.when_pressed = handler.on_trigger
+        try:
+            trigger_btn = Button(
+                pin=cfg["trigger_gpio"],
+                pull_up=False,
+                bounce_time=0.05,
+            )
+            trigger_btn.when_pressed = handler.on_trigger
+        except Exception as exc:
+            log.error("Trigger GPIO init failed (%s) — continuing without hardware trigger", exc)
+            trigger_btn = None
     else:
         log.warning("GPIO not available — trigger will never fire")
         trigger_btn = None
