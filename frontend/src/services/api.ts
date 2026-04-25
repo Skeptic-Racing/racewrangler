@@ -65,6 +65,7 @@ export interface Event {
   date: string | null;
   status: 'setup' | 'active' | 'complete';
   timing_mode: 'human' | 'racespy';
+  active_run_group_id: string | null;
   created_at: string;
 }
 
@@ -227,6 +228,27 @@ export async function createEvent(name: string, date: string | null, timing_mode
 
 export async function updateEvent(event_id: string, patch: Partial<Pick<Event, 'name' | 'status' | 'timing_mode'>>): Promise<Event> {
   return apiFetch<Event>(`${V1_BASE}/events/${event_id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+}
+
+export async function getActiveEvent(): Promise<Event | null> {
+  const d = await apiFetch<{ event: Event | null }>('/api/active-event');
+  return d.event;
+}
+
+export async function startEvent(event_id: string): Promise<Event> {
+  return apiFetch<Event>(`${V1_BASE}/events/${event_id}/start`, { method: 'POST' });
+}
+
+export async function endEvent(event_id: string): Promise<Event> {
+  return apiFetch<Event>(`${V1_BASE}/events/${event_id}/end`, { method: 'POST' });
+}
+
+export async function startRunGroup(event_id: string, group_id: string): Promise<Event> {
+  return apiFetch<Event>(`${V1_BASE}/events/${event_id}/run-groups/${group_id}/start`, { method: 'POST' });
+}
+
+export async function stopRunGroup(event_id: string): Promise<Event> {
+  return apiFetch<Event>(`${V1_BASE}/events/${event_id}/run-groups/stop`, { method: 'POST' });
 }
 
 // ---------------------------------------------------------------------------
